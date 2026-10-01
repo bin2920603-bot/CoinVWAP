@@ -152,7 +152,7 @@ def main():
         raise SystemExit("OKX 목록을 못 받음")
     coins = {}
     for t in tk:
-    if not t["instId"].endswith("-USDT-SWAP") or t["instId"].split("-")[0] in {"SPY","SPX","QQQ","XAU","XCU","AMZN","GOOGL","AVGO","ADBE","HPE","TSLA","ORCL","NVDA","AAPL","MSFT","META","NFLX","AMD"}:
+        if not t["instId"].endswith("-USDT-SWAP") or t["instId"].split("-")[0] in {"SPY","SPX","QQQ","XAU","XCU","AMZN","GOOGL","AVGO","ADBE","HPE","TSLA","ORCL","NVDA","AAPL","MSFT","META","NFLX","AMD"}:
             continue
         last, o24 = float(t["last"] or 0), float(t["open24h"] or 0)
         vol = float(t["volCcy24h"] or 0) * last
