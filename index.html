@@ -39,7 +39,7 @@
 <script>
 // 설정: 거래대금 상위 TOP개 코인, 최근 N개 봉으로 VWAP 계산, LOOK봉 전까지의 돌파를 "금방"으로 본다
 const TF = [["5m","5분"],["15m","15분"],["1H","1시간"],["1D","일"],["1W","주"],["1M","월"]];
-const TOP = 150, N = 100, MINB = 20, LOOK = 2;
+const TOP = 300, N = 100, MINB = 20, LOOK = 2;
 let cs = [], busy = false, doneAt = "";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
