@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>타점 후보 · OKX 선물</title>
+<style>
+  body{margin:0;background:#0E141B;color:#C9D6E2;font:13px system-ui,"Malgun Gothic",sans-serif}
+  header{position:sticky;top:0;z-index:5;background:#0E141B;padding:12px;border-bottom:1px solid #22303E}
+  h1{margin:0 0 6px;font-size:15px}
+  h1 span{color:#D6B15E}
+  #st{color:#6E8195;font-size:12px;margin-bottom:8px}
+  button{background:#131C26;color:#C9D6E2;border:1px solid #22303E;border-radius:4px;padding:7px 12px;font:inherit;margin-right:6px}
+  button.on{background:#D6B15E;color:#0E141B;font-weight:700}
+  .note{padding:10px 12px;color:#6E8195;font-size:12px;line-height:1.6}
+  .wrap{overflow:auto}
+  table{border-collapse:separate;border-spacing:0;white-space:nowrap}
+  th,td{padding:0 10px;height:36px;border-bottom:1px solid #1A2530;text-align:center}
+  th{position:sticky;top:0;background:#131C26;color:#6E8195;font-weight:500;font-size:11px;z-index:2}
+  td.coin,th.coin{position:sticky;left:0;background:#0E141B;text-align:left;border-right:1px solid #22303E;z-index:3}
+  th.coin{background:#131C26;z-index:4}
+  td.coin a{color:#C9D6E2;text-decoration:none}
+  .up{color:#F2606C}.down{color:#4D92F0}.gold{color:#D6B15E}
+  .empty{padding:30px 16px;color:#6E8195;line-height:1.7}
+</style>
+</head>
+<body>
+<header>
+  <h1>타점 후보 <span>OKX 선물 · 일봉</span></h1>
+  <div id="st">불러오는 중...</div>
+  <button id="b1" class="on">뚫기 직전</button><button id="b2">뚫은 직후</button>
+</header>
+<div class="note" id="note"></div>
+<div class="wrap" id="out"></div>
+
+<script>
+let data = null, tab = "squeeze";
+const f = v => (v > 0 ? "+" : "") + v.toFixed(1) + "%";
+const cls = v => v > 0 ? "up" : v < 0 ? "down" : "";
+const NOTE = {
+  squeeze: "선(EMA20·50, VWAP100)이 좁게 모여 있고 가격이 그 근처에 붙어 있는, 아직 안 뚫은 코인이에요. 선폭이 작을수록 선이 많이 모인 거예요. EMA200까지는 위로 남은 거리예요.",
+  breakout: "오늘이나 어제, 큰 양봉이 선(EMA7·20·50·200, VWAP100)을 한 번에 넘은 코인이에요. 몸통은 평소 양봉의 몇 배인지예요."
+};
+
+async function load() {
+  try {
+    const r = await fetch("data/setup.json?t=" + Date.now(), {cache: "no-store"});
+    if (!r.ok) throw 0;
+    data = await r.json();
+  } catch (e) {
+    document.getElementById("st").textContent = "결과 파일이 아직 없어요";
+    document.getElementById("out").innerHTML = '<div class="empty">GitHub의 Actions에서 setup을 한 번 실행해 주세요.</div>';
+    return;
+  }
+  render();
+}
+
+function render() {
+  document.getElementById("b1").className = tab === "squeeze" ? "on" : "";
+  document.getElementById("b2").className = tab === "breakout" ? "on" : "";
+  document.getElementById("note").textContent = NOTE[tab];
+  const t = new Date(data.updated_at);
+  const min = Math.round((Date.now() - t.getTime()) / 60000);
+  document.getElementById("st").textContent =
+    "상위 " + data.checked + "종목 검사 · " + min + "분 전 결과 · 뚫기 직전 " + data.squeeze.length + " · 뚫은 직후 " + data.breakout.length;
+  const rows = tab === "squeeze" ? data.squeeze : data.breakout;
+  if (!rows.length) {
+    document.getElementById("out").innerHTML = '<div class="empty">조건에 맞는 코인이 지금은 없어요.</div>';
+    return;
+  }
+  let h = '<table><thead><tr><th class="coin">코인</th><th>24시간</th>';
+  h += tab === "squeeze"
+    ? "<th>선폭</th><th>선과거리</th><th>변동비</th><th>EMA200까지</th>"
+    : "<th>시점</th><th>양봉</th><th>몸통</th><th>거래량</th><th>넘은선</th>";
+  h += "</tr></thead><tbody>";
+  rows.forEach(c => {
+    const url = "https://www.okx.com/trade-swap/" + c.sym.toLowerCase() + "-usdt-swap";
+    h += '<tr><td class="coin"><a href="' + url + '" target="_blank" rel="noopener">' + c.sym + "</a></td>";
+    h += '<td class="' + cls(c.chg) + '">' + f(c.chg) + "</td>";
+    if (tab === "squeeze") {
+      h += "<td>" + c.spread.toFixed(1) + "%</td><td>" + f(c.near) + "</td><td>" + c.contr + "배</td>";
+      h += '<td class="gold">' + f(c.to200) + "</td>";
+    } else {
+      h += "<td>" + (c.k === 0 ? "오늘" : "어제") + '</td><td class="up">' + f(c.gain) + "</td>";
+      h += "<td>" + c.body_x + "배</td><td>" + (c.vol_x == null ? "–" : c.vol_x + "배") + "</td><td>" + c.crossed + "개</td>";
+    }
+    h += "</tr>";
+  });
+  document.getElementById("out").innerHTML = h + "</tbody></table>";
+}
+
+document.getElementById("b1").onclick = () => { tab = "squeeze"; if (data) render(); };
+document.getElementById("b2").onclick = () => { tab = "breakout"; if (data) render(); };
+load();
+setInterval(load, 120000);
+</script>
+</body>
+</html>
