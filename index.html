@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VWAP 돌파 · OKX 선물</title>
+<style>
+  body{margin:0;background:#0E141B;color:#C9D6E2;font:13px system-ui,"Malgun Gothic",sans-serif}
+  header{position:sticky;top:0;z-index:5;background:#0E141B;padding:12px;border-bottom:1px solid #22303E}
+  h1{margin:0 0 6px;font-size:15px}
+  h1 span{color:#D6B15E}
+  #st{color:#6E8195;font-size:12px;margin-bottom:8px}
+  button{background:#131C26;color:#C9D6E2;border:1px solid #22303E;border-radius:4px;padding:6px 10px;font:inherit}
+  label{margin-left:10px;font-size:12px;color:#6E8195}
+  .wrap{overflow:auto}
+  table{border-collapse:separate;border-spacing:0;white-space:nowrap}
+  th,td{padding:0 9px;height:36px;border-bottom:1px solid #1A2530;text-align:center}
+  th{position:sticky;top:0;background:#131C26;color:#6E8195;font-weight:500;font-size:11px;z-index:2}
+  td.coin,th.coin{position:sticky;left:0;background:#0E141B;text-align:left;border-right:1px solid #22303E;z-index:3}
+  th.coin{background:#131C26;z-index:4}
+  td.coin a{color:#C9D6E2;text-decoration:none}
+  .up{color:#F2606C}.down{color:#4D92F0}
+  .c0{background:rgba(242,96,108,.28);color:#F2606C;font-weight:700}
+  .c1{background:rgba(240,150,60,.22);color:#F0963C;font-weight:600}
+  .c2{background:rgba(232,193,90,.16);color:#E8C15A}
+  .dim{color:#2C3A48}
+  .empty{padding:30px 16px;color:#6E8195;line-height:1.7}
+</style>
+</head>
+<body>
+<header>
+  <h1>VWAP 돌파 <span>OKX 선물</span></h1>
+  <div id="st">준비 중</div>
+  <button id="go">다시 검사</button>
+  <label><input type="checkbox" id="all"> 돌파 없는 코인도 보기</label>
+</header>
+<div class="wrap" id="out"><div class="empty">검사를 시작합니다...</div></div>
+
+<script>
+// 설정: 거래대금 상위 TOP개 코인, 최근 N개 봉으로 VWAP 계산, LOOK봉 전까지의 돌파를 "금방"으로 본다
+const TF = [["5m","5분"],["15m","15분"],["1H","1시간"],["1D","일"],["1W","주"],["1M","월"]];
+const TOP = 150, N = 100, MINB = 20, LOOK = 2;
+let cs = [], busy = false, doneAt = "";
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const st = t => document.getElementById("st").textContent = t;
+
+async function jget(url) {
+  for (let t = 0; t < 3; t++) {
+    try {
+      const r = await fetch(url);
+      if (r.status === 429) { await sleep(1500); continue; }
+      const j = await r.json();
+      if (j.code !== "0") { await sleep(800); continue; }
+      return j.data;
+    } catch (e) { await sleep(500); }
+  }
+  return null;
+}
+
+// i번째 봉까지 최근 N개 봉의 VWAP
+function vwapAt(b, i) {
+  let pv = 0, v = 0;
+  for (let k = Math.max(0, i - N + 1); k <= i; k++) {
+    pv += (b[k].h + b[k].l + b[k].c) / 3 * b[k].v;
+    v += b[k].v;
+  }
+  return v > 0 ? pv / v : null;
+}
+
+// 결과: {above: VWAP 위인가, k: 몇 봉 전에 뚫었나(0=지금, 없으면 null)}
+function check(b) {
+  const L = b.length - 1;
+  if (L < MINB + LOOK + 1) return null;
+  const vN = vwapAt(b, L);
+  if (vN == null) return null;
+  if (!(b[L].c > vN)) return {above: false, k: null};
+  for (let k = 0; k <= LOOK; k++) {
+    const i = L - k;
+    const vi = vwapAt(b, i), vp = vwapAt(b, i - 1);
+    if (vi == null || vp == null) break;
+    if (b[i].c > vi && b[i - 1].c <= vp) return {above: true, k: k};
+  }
+  return {above: true, k: null};
+}
+
+async function scan() {
+  if (busy) return;
+  busy = true;
+  document.getElementById("go").disabled = true;
+  st("코인 목록 받는 중...");
+  const tk = await jget("https://www.okx.com/api/v5/market/tickers?instType=SWAP");
+  if (!tk) {
+    st("OKX에서 목록을 못 받았어요. 잠시 뒤 '다시 검사'를 눌러주세요");
+    busy = false; document.getElementById("go").disabled = false;
+    return;
+  }
+  const list = tk.filter(t => t.instId.endsWith("-USDT-SWAP"))
+    .map(t => ({
+      sym: t.instId.split("-")[0], id: t.instId,
+      vol: (+t.volCcy24h) * (+t.last),
+      chg: (+t.last / +t.open24h - 1) * 100, res: {}
+    }))
+    .filter(x => x.vol > 0)
+    .sort((a, b) => b.vol - a.vol)
+    .slice(0, TOP);
+
+  const jobs = [];
+  list.forEach(c => TF.forEach(([bar]) => jobs.push([c, bar])));
+  let idx = 0, done = 0;
+  async function worker() {
+    while (idx < jobs.length) {
+      const [c, bar] = jobs[idx++];
+      const d = await jget("https://www.okx.com/api/v5/market/candles?instId=" + c.id + "&bar=" + bar + "&limit=120");
+      if (d) {
+        const b = d.slice().reverse().map(x => ({h: +x[2], l: +x[3], c: +x[4], v: +x[5]}));
+        c.res[bar] = check(b);
+      }
+      done++;
+      if (done % 20 === 0) st("검사 중... " + Math.round(done / jobs.length * 100) + "%");
+      await sleep(250);
+    }
+  }
+  await Promise.all([1, 2, 3, 4].map(worker));
+  cs = list;
+  const d = new Date();
+  doneAt = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  render();
+  busy = false;
+  document.getElementById("go").disabled = false;
+}
+
+function render() {
+  const all = document.getElementById("all").checked;
+  let r = cs.map(c => {
+    let best = 9, n = 0;
+    TF.forEach(([bar]) => {
+      const x = c.res[bar];
+      if (x && x.k != null) { n++; best = Math.min(best, x.k); }
+    });
+    return {c: c, best: best, n: n};
+  });
+  const hit = r.filter(x => x.n > 0).length;
+  if (!all) r = r.filter(x => x.n > 0);
+  r.sort((a, b) => b.n - a.n || a.best - b.best || b.c.vol - a.c.vol);
+
+  st("검사 완료 " + doneAt + " · 상위 " + cs.length + "종목 중 돌파 " + hit + "종목 (5분마다 자동 검사)");
+  if (!r.length) {
+    document.getElementById("out").innerHTML = '<div class="empty">지금 막 VWAP을 뚫은 코인이 없어요.</div>';
+    return;
+  }
+  let h = '<table><thead><tr><th class="coin">코인</th><th>24시간</th>';
+  TF.forEach(([bar, name]) => h += "<th>" + name + "</th>");
+  h += "</tr></thead><tbody>";
+  r.forEach(({c}) => {
+    const url = "https://www.okx.com/trade-swap/" + c.sym.toLowerCase() + "-usdt-swap";
+    const cls = c.chg > 0 ? "up" : c.chg < 0 ? "down" : "";
+    h += '<tr><td class="coin"><a href="' + url + '" target="_blank" rel="noopener">' + c.sym + "</a></td>";
+    h += '<td class="' + cls + '">' + (c.chg > 0 ? "+" : "") + c.chg.toFixed(1) + "%</td>";
+    TF.forEach(([bar]) => {
+      const x = c.res[bar];
+      if (!x) h += '<td class="dim">–</td>';
+      else if (x.k === 0) h += '<td class="c0">▲ 지금</td>';
+      else if (x.k === 1) h += '<td class="c1">▲ 1봉전</td>';
+      else if (x.k === 2) h += '<td class="c2">▲ 2봉전</td>';
+      else h += '<td class="dim">' + (x.above ? "위" : "아래") + "</td>";
+    });
+    h += "</tr>";
+  });
+  h += "</tbody></table>";
+  document.getElementById("out").innerHTML = h;
+}
+
+document.getElementById("go").addEventListener("click", scan);
+document.getElementById("all").addEventListener("change", () => { if (cs.length) render(); });
+scan();
+setInterval(scan, 300000);
+</script>
+</body>
+</html>
