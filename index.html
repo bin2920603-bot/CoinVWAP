@@ -31,19 +31,21 @@
 <header>
   <h1>VWAP 돌파 <span>OKX 선물</span></h1>
   <div id="st">준비 중</div>
-  <button id="go">다시 검사</button>
+  <button id="go">직접 다시 검사</button>
   <label><input type="checkbox" id="all"> 돌파 없는 코인도 보기</label>
 </header>
-<div class="wrap" id="out"><div class="empty">검사를 시작합니다...</div></div>
+<div class="wrap" id="out"><div class="empty">불러오는 중...</div></div>
 
 <script>
 // 설정: 거래대금 상위 TOP개 코인, 최근 N개 봉으로 VWAP 계산, LOOK봉 전까지의 돌파를 "금방"으로 본다
 const TF = [["5m","5분"],["15m","15분"],["1H","1시간"],["1D","일"],["1W","주"],["1M","월"]];
 const TOP = 300, N = 100, MINB = 20, LOOK = 2;
-let cs = [], busy = false, doneAt = "";
+const STALE_MIN = 40;   // 서버 결과가 이 분(分)보다 오래되면 화면에서 직접 검사
+let cs = [], busy = false, doneAt = "", source = "";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const st = t => document.getElementById("st").textContent = t;
+const hm = d => String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
 
 async function jget(url) {
   for (let t = 0; t < 3; t++) {
@@ -58,7 +60,6 @@ async function jget(url) {
   return null;
 }
 
-// i번째 봉까지 최근 N개 봉의 VWAP
 function vwapAt(b, i) {
   let pv = 0, v = 0;
   for (let k = Math.max(0, i - N + 1); k <= i; k++) {
@@ -68,7 +69,6 @@ function vwapAt(b, i) {
   return v > 0 ? pv / v : null;
 }
 
-// 결과: {above: VWAP 위인가, k: 몇 봉 전에 뚫었나(0=지금, 없으면 null)}
 function check(b) {
   const L = b.length - 1;
   if (L < MINB + LOOK + 1) return null;
@@ -84,17 +84,27 @@ function check(b) {
   return {above: true, k: null};
 }
 
-async function scan() {
-  if (busy) return;
-  busy = true;
-  document.getElementById("go").disabled = true;
+// 1순위: 서버가 계산해 둔 결과 읽기 (바로 보임)
+async function loadServer() {
+  try {
+    const r = await fetch("data/vwap.json?t=" + Date.now(), {cache: "no-store"});
+    if (!r.ok) return false;
+    const j = await r.json();
+    const t = new Date(j.updated_at);
+    const age = (Date.now() - t.getTime()) / 60000;
+    if (!j.coins || !j.coins.length || age > STALE_MIN) return false;
+    cs = j.coins;
+    doneAt = hm(t);
+    source = "서버 결과";
+    return true;
+  } catch (e) { return false; }
+}
+
+// 2순위: 화면에서 직접 검사 (서버 결과가 없거나 오래됐을 때)
+async function scanLocal() {
   st("코인 목록 받는 중...");
   const tk = await jget("https://www.okx.com/api/v5/market/tickers?instType=SWAP");
-  if (!tk) {
-    st("OKX에서 목록을 못 받았어요. 잠시 뒤 '다시 검사'를 눌러주세요");
-    busy = false; document.getElementById("go").disabled = false;
-    return;
-  }
+  if (!tk) return false;
   const list = tk.filter(t => t.instId.endsWith("-USDT-SWAP"))
     .map(t => ({
       sym: t.instId.split("-")[0], id: t.instId,
@@ -117,15 +127,26 @@ async function scan() {
         c.res[bar] = check(b);
       }
       done++;
-      if (done % 20 === 0) st("검사 중... " + Math.round(done / jobs.length * 100) + "%");
+      if (done % 20 === 0) st("직접 검사 중... " + Math.round(done / jobs.length * 100) + "%");
       await sleep(250);
     }
   }
   await Promise.all([1, 2, 3, 4].map(worker));
   cs = list;
-  const d = new Date();
-  doneAt = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
-  render();
+  doneAt = hm(new Date());
+  source = "화면에서 직접 검사";
+  return true;
+}
+
+async function refresh(force) {
+  if (busy) return;
+  busy = true;
+  document.getElementById("go").disabled = true;
+  let ok = false;
+  if (!force) ok = await loadServer();
+  if (!ok) ok = await scanLocal();
+  if (ok) render();
+  else st("OKX/서버에서 데이터를 못 받았어요. 잠시 뒤 다시 눌러주세요");
   busy = false;
   document.getElementById("go").disabled = false;
 }
@@ -144,7 +165,7 @@ function render() {
   if (!all) r = r.filter(x => x.n > 0);
   r.sort((a, b) => b.n - a.n || a.best - b.best || b.c.vol - a.c.vol);
 
-  st("검사 완료 " + doneAt + " · 상위 " + cs.length + "종목 중 돌파 " + hit + "종목 (5분마다 자동 검사)");
+  st(source + " " + doneAt + " · 상위 " + cs.length + "종목 중 돌파 " + hit + "종목");
   if (!r.length) {
     document.getElementById("out").innerHTML = '<div class="empty">지금 막 VWAP을 뚫은 코인이 없어요.</div>';
     return;
@@ -171,10 +192,10 @@ function render() {
   document.getElementById("out").innerHTML = h;
 }
 
-document.getElementById("go").addEventListener("click", scan);
+document.getElementById("go").addEventListener("click", () => refresh(true));
 document.getElementById("all").addEventListener("change", () => { if (cs.length) render(); });
-scan();
-setInterval(scan, 300000);
+refresh(false);
+setInterval(() => refresh(false), 120000);
 </script>
 </body>
 </html>
