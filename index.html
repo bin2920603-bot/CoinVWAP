@@ -25,6 +25,7 @@
   .c2{background:rgba(232,193,90,.16);color:#E8C15A}
   .dim{color:#2C3A48}
   .gap{color:#3A4A5A}
+  .gap2{color:#6E8195}
   /* 전고점: 3일=주황, 20일=보라, 120일=빨강. 3% 이내로 막 넘었으면 더 진하게 */
   .h3{background:rgba(240,150,60,.14);color:#F0963C}
   .h3.f{background:rgba(240,150,60,.32);font-weight:700}
@@ -46,6 +47,7 @@
     <option value="mix">정렬: 돌파 많은 순</option>
     <option value="fresh">정렬: 방금 넘은 순</option>
     <option value="tvx">정렬: 거래대금 증가 배수순</option>
+    <option value="tvd">정렬: 거래대금 증감순 (그 전 5분 대비)</option>
     <option value="chg">정렬: 24시간 상승률순</option>
   </select>
   <label><input type="checkbox" id="all"> 돌파 없는 코인도 보기</label>
@@ -123,7 +125,7 @@ function extra(bar, d) {
         let s = 0;
         for (let i = 1; i < 13; i++) s += +done[i][7];
         const avg = s / 12;
-        return {tv5: Math.round(t5), tvx: avg > 0 ? Math.round(t5 / avg * 100) / 100 : null};
+        return {tv5: Math.round(t5), tv5p: Math.round(+done[1][7]), tvx: avg > 0 ? Math.round(t5 / avg * 100) / 100 : null};
       }
     }
   } catch (e) {}
@@ -255,13 +257,15 @@ function render() {
       const g = gaps[key];
       if (g != null && g > 0) { nh++; fresh = Math.min(fresh, g); }
     });
-    return {c: c, best: best, n: n, gaps: gaps, nh: nh, fresh: fresh};
+    const tvd = (c.tv5 != null && c.tv5p > 0) ? (c.tv5 / c.tv5p - 1) * 100 : null;  // 그 전 5분 대비 증감(%)
+    return {c: c, best: best, n: n, gaps: gaps, nh: nh, fresh: fresh, tvd: tvd};
   });
   const hitV = r.filter(x => x.n > 0).length;
   const hitH = r.filter(x => x.nh > 0).length;
   if (!all) r = r.filter(x => x.n > 0 || x.nh > 0);
   if (sortBy === "fresh") r.sort((a, b) => a.fresh - b.fresh || b.c.vol - a.c.vol);
   else if (sortBy === "tvx") r.sort((a, b) => (b.c.tvx == null ? -1 : b.c.tvx) - (a.c.tvx == null ? -1 : a.c.tvx));
+  else if (sortBy === "tvd") r.sort((a, b) => (b.tvd == null ? -1e9 : b.tvd) - (a.tvd == null ? -1e9 : a.tvd));
   else if (sortBy === "chg") r.sort((a, b) => b.c.chg - a.c.chg);
   else r.sort((a, b) => (b.n + b.nh) - (a.n + a.nh) || a.best - b.best || b.c.vol - a.c.vol);
 
@@ -273,10 +277,10 @@ function render() {
   }
   let h = '<table><thead><tr><th class="coin">코인</th><th>현재가</th><th>24시간</th>';
   HI.forEach(([key, name]) => h += "<th>" + name + " 고점</th>");
-  h += "<th>5분 거래대금(USDT)</th><th>증가 배수</th>";
+  h += "<th>최근 5분(USDT)</th><th>그 전 5분</th><th>1시간 평균 대비</th>";
   TF.forEach(([bar, name]) => h += "<th>VWAP " + name + "</th>");
   h += "</tr></thead><tbody>";
-  r.forEach(({c, gaps}) => {
+  r.forEach(({c, gaps, tvd}) => {
     const url = "https://www.okx.com/trade-swap/" + c.sym.toLowerCase() + "-usdt-swap";
     const cls = c.chg > 0 ? "up" : c.chg < 0 ? "down" : "";
     h += '<tr><td class="coin"><a href="' + url + '" target="_blank" rel="noopener">' + c.sym + "</a></td>";
@@ -288,7 +292,9 @@ function render() {
       else if (g > 0) h += '<td class="' + HCLS[key] + (g <= FRESH ? " f" : "") + '">▲ +' + g.toFixed(1) + "%</td>";
       else h += '<td class="gap">' + g.toFixed(1) + "%</td>";
     });
-    h += "<td>" + fmtV(c.tv5) + "</td>";
+    // 최근 5분 거래대금: 그 전 5분보다 늘었으면 빨강, 줄었으면 파랑
+    h += '<td class="' + (tvd == null || tvd === 0 ? "" : tvd > 0 ? "up" : "down") + '">' + fmtV(c.tv5) + "</td>";
+    h += '<td class="gap2">' + fmtV(c.tv5p) + "</td>";
     const x = c.tvx;
     h += x == null ? '<td class="dim">–</td>'
       : '<td class="' + (x >= 3 ? "t3" : x >= 2 ? "t2" : "") + '">' + x.toFixed(1) + "배</td>";
