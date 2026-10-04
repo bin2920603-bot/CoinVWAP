@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""OKX 선물 상위 코인의 VWAP 돌파를 6가지 봉으로 검사해 data/vwap.json 에 저장한다.
-추가: 전고점(1시간봉 3일 / 일봉 20일 / 일봉 120일) 가격, 5분 거래대금(최근·그 전)과 증가 배수도 함께 저장한다."""
+"""OKX 선물 중 1분 거래대금이 막 늘어난 종목 30개를 골라 VWAP 돌파를 6가지 봉으로 검사해 data/vwap.json 에 저장한다.
+추가: 전고점(1시간봉 3일 / 일봉 20일 / 일봉 120일) 가격, 5분·1분 거래대금과 증가 배수도 함께 저장한다."""
 import json, os, time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -10,7 +10,7 @@ HOSTS = ["https://www.okx.com", "https://aws.okx.com"]
 KST = timezone(timedelta(hours=9))
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "vwap.json")
 BARS = ["5m", "15m", "1H", "1D", "1W", "1M"]
-TOP, N, MINB, LOOK = 150, 100, 20, 2
+TOP, PICK, N, MINB, LOOK = 150, 30, 100, 20, 2
 
 
 def get(path, params=None):
@@ -58,6 +58,16 @@ def check(b):
     return {"above": True, "k": None}
 
 
+def tv_ratio(d):
+    """1분봉 목록(최신이 맨 앞)에서 직전에 끝난 1분 거래대금과 그 전 12분 평균 대비 배수."""
+    done = [x for x in d if len(x) > 8 and x[8] == "1"]
+    if len(done) >= 13:
+        t1 = float(done[0][7])
+        avg = sum(float(x[7]) for x in done[1:13]) / 12
+        return round(t1), (round(t1 / avg, 2) if avg > 0 else None)
+    return None, None
+
+
 def extra(bar, d):
     """d: OKX 원본 봉 목록(최신이 맨 앞). 전고점 가격, 5분 거래대금을 계산한다."""
     try:
@@ -87,6 +97,16 @@ def extra(bar, d):
     return {}
 
 
+def rank(inst):
+    """종목을 고르기 위해 1분 거래대금 증가 배수만 빠르게 본다."""
+    d = get("/api/v5/market/candles", {"instId": inst, "bar": "1m", "limit": "20"})
+    time.sleep(0.2)
+    if not d:
+        return inst, None, None
+    t1, x1 = tv_ratio(d)
+    return inst, t1, x1
+
+
 def job(arg):
     inst, bar = arg
     d = get("/api/v5/market/candles", {"instId": inst, "bar": bar, "limit": "121" if bar == "1D" else "120"})
@@ -111,7 +131,14 @@ def main():
             coins.append({"sym": t["instId"].split("-")[0], "id": t["instId"],
                           "vol": vol, "chg": round((last / o - 1) * 100, 2), "res": {}})
     coins.sort(key=lambda c: -c["vol"])
-    coins = coins[:TOP]
+    pool = coins[:TOP]
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        ranks = {i: (t1, x1) for i, t1, x1 in ex.map(rank, [c["id"] for c in pool])}
+    for c in pool:
+        t1, x1 = ranks.get(c["id"], (None, None))
+        c["tv1"], c["tv1x"] = t1, x1
+    pool.sort(key=lambda c: -(c.get("tv1x") or 0))
+    coins = pool[:PICK]
     by = {c["id"]: c for c in coins}
     jobs = [(c["id"], bar) for c in coins for bar in BARS]
     with ThreadPoolExecutor(max_workers=4) as ex:
