@@ -10,7 +10,7 @@ HOSTS = ["https://www.okx.com", "https://aws.okx.com"]
 KST = timezone(timedelta(hours=9))
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "vwap.json")
 BARS = ["5m", "15m", "1H", "1D", "1W", "1M"]
-TOP, N, MINB, LOOK = 300, 100, 20, 2
+TOP, N, MINB, LOOK = 150, 100, 20, 2
 
 
 def get(path, params=None):
