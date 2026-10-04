@@ -44,10 +44,9 @@
   <div id="st">준비 중</div>
   <button id="go">직접 다시 검사</button>
   <select id="sort">
+    <option value="tvx">정렬: 1분 거래대금 증가 배수순</option>
     <option value="mix">정렬: 돌파 많은 순</option>
     <option value="fresh">정렬: 방금 넘은 순</option>
-    <option value="tvx">정렬: 거래대금 증가 배수순</option>
-    <option value="tvd">정렬: 거래대금 증감순 (그 전 5분 대비)</option>
     <option value="chg">정렬: 24시간 상승률순</option>
   </select>
   <label><input type="checkbox" id="all"> 돌파 없는 코인도 보기</label>
@@ -105,7 +104,7 @@ function check(b) {
   return {above: true, k: null};
 }
 
-// 전고점 가격(h3d, h20d, h120d)과 5분 거래대금(tv5, tvx)을 계산한다. d: OKX 원본 봉(최신이 맨 앞)
+// 전고점 가격(h3d, h20d, h120d)을 계산한다. d: OKX 원본 봉(최신이 맨 앞)
 function extra(bar, d) {
   try {
     if (bar === "1H" || bar === "1D") {
@@ -117,15 +116,6 @@ function extra(bar, d) {
         const o = {h20d: Math.max(...prior.slice(-20))};
         if (prior.length >= 30) o.h120d = Math.max(...prior.slice(-120));
         return o;
-      }
-    } else if (bar === "5m") {
-      const done = d.filter(x => x.length > 8 && x[8] === "1");  // 끝난 봉만
-      if (done.length >= 13) {
-        const t5 = +done[0][7];
-        let s = 0;
-        for (let i = 1; i < 13; i++) s += +done[i][7];
-        const avg = s / 12;
-        return {tv5: Math.round(t5), tv5p: Math.round(+done[1][7]), tvx: avg > 0 ? Math.round(t5 / avg * 100) / 100 : null};
       }
     }
   } catch (e) {}
@@ -148,7 +138,7 @@ async function loadServer() {
   } catch (e) { return false; }
 }
 
-// 2순위: 화면에서 직접 검사 (서버 결과가 없거나 오래됐을 때)
+// 2순위: 화면에서 직접 검사 (서버 결과가 없거나 오래됐을 때). 이 경우 1분 거래대금 칸은 비어 있다.
 async function scanLocal() {
   st("코인 목록 받는 중...");
   const tk = await jget("https://www.okx.com/api/v5/market/tickers?instType=SWAP");
@@ -257,15 +247,13 @@ function render() {
       const g = gaps[key];
       if (g != null && g > 0) { nh++; fresh = Math.min(fresh, g); }
     });
-    const tvd = (c.tv5 != null && c.tv5p > 0) ? (c.tv5 / c.tv5p - 1) * 100 : null;  // 그 전 5분 대비 증감(%)
-    return {c: c, best: best, n: n, gaps: gaps, nh: nh, fresh: fresh, tvd: tvd};
+    return {c: c, best: best, n: n, gaps: gaps, nh: nh, fresh: fresh};
   });
   const hitV = r.filter(x => x.n > 0).length;
   const hitH = r.filter(x => x.nh > 0).length;
   if (!all) r = r.filter(x => x.n > 0 || x.nh > 0);
   if (sortBy === "fresh") r.sort((a, b) => a.fresh - b.fresh || b.c.vol - a.c.vol);
-  else if (sortBy === "tvx") r.sort((a, b) => (b.c.tvx == null ? -1 : b.c.tvx) - (a.c.tvx == null ? -1 : a.c.tvx));
-  else if (sortBy === "tvd") r.sort((a, b) => (b.tvd == null ? -1e9 : b.tvd) - (a.tvd == null ? -1e9 : a.tvd));
+  else if (sortBy === "tvx") r.sort((a, b) => (b.c.tv1x == null ? -1 : b.c.tv1x) - (a.c.tv1x == null ? -1 : a.c.tv1x));
   else if (sortBy === "chg") r.sort((a, b) => b.c.chg - a.c.chg);
   else r.sort((a, b) => (b.n + b.nh) - (a.n + a.nh) || a.best - b.best || b.c.vol - a.c.vol);
 
@@ -277,10 +265,10 @@ function render() {
   }
   let h = '<table><thead><tr><th class="coin">코인</th><th>현재가</th><th>24시간</th>';
   HI.forEach(([key, name]) => h += "<th>" + name + " 고점</th>");
-  h += "<th>최근 5분(USDT)</th><th>그 전 5분</th><th>1시간 평균 대비</th>";
+  h += "<th>1분 전</th><th>2분 전</th><th>3분 전</th><th>4분 전</th><th>5분 전</th><th>1분 배수</th>";
   TF.forEach(([bar, name]) => h += "<th>VWAP " + name + "</th>");
   h += "</tr></thead><tbody>";
-  r.forEach(({c, gaps, tvd}) => {
+  r.forEach(({c, gaps}) => {
     const url = "https://www.okx.com/trade-swap/" + c.sym.toLowerCase() + "-usdt-swap";
     const cls = c.chg > 0 ? "up" : c.chg < 0 ? "down" : "";
     h += '<tr><td class="coin"><a href="' + url + '" target="_blank" rel="noopener">' + c.sym + "</a></td>";
@@ -292,10 +280,14 @@ function render() {
       else if (g > 0) h += '<td class="' + HCLS[key] + (g <= FRESH ? " f" : "") + '">▲ +' + g.toFixed(1) + "%</td>";
       else h += '<td class="gap">' + g.toFixed(1) + "%</td>";
     });
-    // 최근 5분 거래대금: 그 전 5분보다 늘었으면 빨강, 줄었으면 파랑
-    h += '<td class="' + (tvd == null || tvd === 0 ? "" : tvd > 0 ? "up" : "down") + '">' + fmtV(c.tv5) + "</td>";
-    h += '<td class="gap2">' + fmtV(c.tv5p) + "</td>";
-    const x = c.tvx;
+    // 1분 거래대금 5칸: 직전(오른쪽) 분보다 늘었으면 빨강, 줄었으면 파랑
+    const v = c.tv1s || [];
+    for (let i = 0; i < 5; i++) {
+      const a = v[i], p = v[i + 1];
+      const k = (a == null || p == null || a === p) ? "" : a > p ? "up" : "down";
+      h += '<td class="' + k + '">' + fmtV(a) + "</td>";
+    }
+    const x = c.tv1x;
     h += x == null ? '<td class="dim">–</td>'
       : '<td class="' + (x >= 3 ? "t3" : x >= 2 ? "t2" : "") + '">' + x.toFixed(1) + "배</td>";
     TF.forEach(([bar]) => {
