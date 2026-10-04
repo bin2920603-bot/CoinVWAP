@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """vwap.json 에서 'VWAP 돌파'와 '전고점 돌파' 종목을 찾아 텔레그램으로 알려준다.
+ - 1분 거래대금이 직전 12분 평균의 TVX_MIN 배 이상인 종목만 알린다.
  - 같은 코인·같은 봉(또는 같은 전고점)은 6시간 안에는 다시 알리지 않는다.
- - notify_tf.py 가 끝난 뒤 이어서 실행된다.
 """
 import json, os
 from datetime import datetime, timedelta, timezone
@@ -16,6 +16,7 @@ NAMES = {"5m": "5분", "15m": "15분", "1H": "1시간", "1D": "일봉", "1W": "�
 LOOK = {"5m": 2, "15m": 1, "1H": 1, "1D": 1, "1W": 0, "1M": 0}
 HIGHS = [("h120d", "일봉 120일 고점"), ("h20d", "일봉 20일 고점"), ("h3d", "1시간 3일 고점")]
 JUST = 2.0
+TVX_MIN = 2.0
 COOLDOWN_H = 6
 MAX_LINES = 15
 PAGE = "https://bin2920603-bot.github.io/CoinVWAP/"
@@ -91,7 +92,10 @@ def main():
     for c in data.get("coins", []):
         sym = c["sym"]
         chg = c.get("chg", 0)
-        tv = f" | 5분 거래대금 {c['tvx']}배" if c.get("tvx") is not None else ""
+        x = c.get("tv1x")
+        if x is None or x < TVX_MIN:
+            continue
+        tv = f" | 1분 거래대금 {x}배"
 
         for bar in BARS:
             r = (c.get("res") or {}).get(bar)
