@@ -21,14 +21,23 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install requests
+      - name: 시간 확인
+        id: t
+        run: |
+          m=$(TZ=Asia/Seoul date +%M)
+          if [ $((10#$m % 15)) -lt 3 ]; then echo "tf=1" >> $GITHUB_OUTPUT; else echo "tf=0" >> $GITHUB_OUTPUT; fi
       - run: python vwap.py
-      - run: python setup_tf.py
+      - name: 타점 계산
+        if: steps.t.outputs.tf == '1'
+        run: python setup_tf.py
       - name: 알림
         continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python notify_vwap.py ; python notify_tf.py
+        run: |
+          python notify_vwap.py || true
+          if [ "${{ steps.t.outputs.tf }}" = "1" ]; then python notify_tf.py; fi
       - name: 커밋
         run: |
           git config user.name  "github-actions[bot]"
