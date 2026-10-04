@@ -22,6 +22,12 @@ jobs:
           python-version: "3.11"
       - run: pip install requests
       - run: python vwap.py
+      - name: 알림
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python notify_vwap.py
       - name: 커밋
         run: |
           git config user.name  "github-actions[bot]"
