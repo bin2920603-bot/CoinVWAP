@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""OKX 선물 상위 코인의 VWAP 돌파를 6가지 봉으로 검사해 data/vwap.json 에 저장한다."""
+"""OKX 선물 상위 코인의 VWAP 돌파를 6가지 봉으로 검사해 data/vwap.json 에 저장한다.
+추가: 전고점(1시간봉 3일 / 일봉 20일 / 일봉 120일) 가격, 5분 거래대금과 증가 배수도 함께 저장한다."""
 import json, os, time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -57,14 +58,41 @@ def check(b):
     return {"above": True, "k": None}
 
 
+def extra(bar, d):
+    """d: OKX 원본 봉 목록(최신이 맨 앞). 전고점 가격, 5분 거래대금을 계산한다."""
+    try:
+        if bar in ("1H", "1D"):
+            highs = [float(x[2]) for x in reversed(d)]
+            prior = highs[:-1]  # 지금 진행 중인 봉은 뺀다
+            if bar == "1H":
+                prior = prior[-72:]  # 3일
+                if len(prior) >= 24:
+                    return {"h3d": max(prior)}
+            else:
+                if len(prior) >= 10:
+                    out = {"h20d": max(prior[-20:])}  # 20일
+                    if len(prior) >= 30:
+                        out["h120d"] = max(prior[-120:])  # 120일 (큰 고점)
+                    return out
+        elif bar == "5m":
+            done = [x for x in d if len(x) > 8 and x[8] == "1"]  # 끝난 봉만
+            if len(done) >= 13:
+                t5 = float(done[0][7])
+                avg = sum(float(x[7]) for x in done[1:13]) / 12
+                return {"tv5": round(t5), "tvx": round(t5 / avg, 2) if avg > 0 else None}
+    except Exception:
+        pass
+    return {}
+
+
 def job(arg):
     inst, bar = arg
-    d = get("/api/v5/market/candles", {"instId": inst, "bar": bar, "limit": "120"})
+    d = get("/api/v5/market/candles", {"instId": inst, "bar": bar, "limit": "121" if bar == "1D" else "120"})
     time.sleep(0.2)
     if not d:
-        return inst, bar, None
+        return inst, bar, None, {}
     b = [(float(x[2]), float(x[3]), float(x[4]), float(x[5])) for x in reversed(d)]
-    return inst, bar, check(b)
+    return inst, bar, check(b), extra(bar, d)
 
 
 def main():
@@ -85,8 +113,9 @@ def main():
     by = {c["id"]: c for c in coins}
     jobs = [(c["id"], bar) for c in coins for bar in BARS]
     with ThreadPoolExecutor(max_workers=4) as ex:
-        for inst, bar, res in ex.map(job, jobs):
+        for inst, bar, res, more in ex.map(job, jobs):
             by[inst]["res"][bar] = res
+            by[inst].update(more)
     for c in coins:
         del c["id"]
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
