@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """OKX 선물 상위 코인의 VWAP 돌파를 6가지 봉으로 검사해 data/vwap.json 에 저장한다.
-추가: 전고점(1시간봉 3일 / 일봉 20일 / 일봉 120일) 가격, 5분 거래대금과 증가 배수도 함께 저장한다."""
+추가: 전고점(1시간봉 3일 / 일봉 20일 / 일봉 120일) 가격, 5분 거래대금(최근·그 전)과 증가 배수도 함께 저장한다."""
 import json, os, time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -77,9 +77,11 @@ def extra(bar, d):
         elif bar == "5m":
             done = [x for x in d if len(x) > 8 and x[8] == "1"]  # 끝난 봉만
             if len(done) >= 13:
-                t5 = float(done[0][7])
+                t5 = float(done[0][7])    # 가장 최근에 끝난 5분
+                t5p = float(done[1][7])   # 그 바로 전 5분
                 avg = sum(float(x[7]) for x in done[1:13]) / 12
-                return {"tv5": round(t5), "tvx": round(t5 / avg, 2) if avg > 0 else None}
+                return {"tv5": round(t5), "tv5p": round(t5p),
+                        "tvx": round(t5 / avg, 2) if avg > 0 else None}
     except Exception:
         pass
     return {}
