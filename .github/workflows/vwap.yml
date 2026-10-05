@@ -44,6 +44,7 @@ jobs:
         run: |
           python notify_vwap.py || true
           python notify_white.py || true
+          python vwap1m.py || true
           if [ "${{ steps.t.outputs.tf }}" = "1" ]; then python notify_tf.py; fi
       - name: 커밋
         run: |
