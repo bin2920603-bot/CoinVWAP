@@ -219,7 +219,7 @@ def main():
 
     if lines:
         more = f"\n(그 외 {len(lines) - MAX_LINES}개는 화면에서 확인)" if len(lines) > MAX_LINES else ""
-        text = "📐 200선 터치 후 상승 (새로 나온 것)\n" + "\n".join(lines[:MAX_LINES]) + more + "\n\n" + PAGE
+        text = "🔔 [200선] " + ", ".join(sorted({l.split(" · ")[1].split(" ")[0] for l in lines[:MAX_LINES]})) + " 터치 후 상승\n" + "\n".join(lines[:MAX_LINES]) + more + "\n\n" + PAGE
         if send(token, chat_id, text):
             for k in new_keys:
                 sent[k] = now.isoformat(timespec="seconds")
