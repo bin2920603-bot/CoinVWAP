@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""OKX 선물 상위 60종목에서 '200선 근처까지 내려갔다가 올라오는 중 + 정배열이 만들어지는 중' 종목을
-1분·5분·15분봉으로 찾아 data/ema200.json 에 저장하고, 새로 나온 것은 텔레그램으로 알린다."""
+"""OKX 선물 상위 60종목에서 '200선 아래/근처에서 올라오면서 200선을 터치하고 올라가는 중 + 정배열이 만들어지는 중' 종목을
+1분·5분·15분봉으로 찾고, 최근 1분 거래대금 5칸(늘고 있는지)도 같이 저장한다. 거래대금이 줄고 있으면 뺀다.
+결과는 data/ema200.json 에 저장하고, 새로 나온 것은 텔레그램으로 알린다."""
 import json, os, time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -14,10 +15,13 @@ STATE = os.path.join(ROOT, "data", "notified_ema200.json")
 BARS = ["1m", "5m", "15m"]
 NAMES = {"1m": "1분", "5m": "5분", "15m": "15분"}
 TOP = 60          # 하루 거래대금 상위 몇 개를 볼지
-MAXGAP = 1.0      # 200선 위로 이만큼(%) 이내일 때만 잡는다
-TOUCH = 0.3       # 저가가 200선 위 이만큼(%) 이내까지 내려왔으면 '닿았다'
+MAXGAP = 1.0      # 지금 종가가 200선 위로 이만큼(%) 이내일 때만 잡는다
+TOUCH = 0.05      # 저가가 200선 위 이만큼(%) 이내이거나 200선 아래면 '닿았다'
 BACK = 6          # 터치가 이 봉 수 이내(0~5봉 전)일 때만 잡는다
+PRE = 5           # 터치 직전 이 봉 수 동안 종가가 200선 아래/근처였어야 한다(떨어지면서 닿은 것 제외)
+NEAR = 0.15       # '근처'로 보는 범위(%): 200선 위 이만큼까지는 아래/근처로 본다
 ALLOW = ("7>20", "7>20>50")   # 정배열이 완성되기 전(노랑·주황) 단계만 잡는다
+DROP_FALLING = True           # 최근 1분 거래대금이 줄고 있으면 뺀다
 COOLDOWN_H = 3    # 같은 종목·같은 봉은 이 시간 안에 다시 알리지 않는다
 MAX_LINES = 15
 PAGE = "https://bin2920603-bot.github.io/CoinVWAP/ema200.html"
@@ -65,6 +69,7 @@ def check(d):
         return None
     if not (e7[L] > e20[L] and e7[L] > e7[L - 3]):
         return None
+
     touched = None
     for k in range(BACK):
         i = L - k
@@ -73,6 +78,20 @@ def check(d):
             break
     if touched is None:
         return None
+    t = L - touched
+
+    pre = range(max(0, t - PRE), t)
+    if len(pre) < 2:
+        return None
+    for i in pre:
+        if closes[i] > e200[i] * (1 + NEAR / 100):
+            return None
+
+    if touched > 0 and not closes[L] > closes[t]:
+        return None
+    if touched > 0 and not any(closes[i] > e200[i] for i in range(t + 1, L + 1)):
+        return None
+
     stage = "7>20"
     if e20[L] > e50[L]:
         stage = "7>20>50"
@@ -83,11 +102,28 @@ def check(d):
     return {"gap": round(gap, 2), "touch": touched, "stage": stage}
 
 
+def tv_info(d):
+    """1분봉 목록(최신이 맨 앞)에서 끝난 1분 거래대금 5개(최신부터)와 증가/감소."""
+    done = [x for x in d if len(x) > 8 and x[8] == "1"]
+    if len(done) < 6:
+        return None
+    vals = [round(float(x[7])) for x in done[:5]]
+    avg = sum(vals) / len(vals)
+    trend = "up" if vals[0] >= avg else "down"
+    return {"tv1s": vals, "trend": trend}
+
+
 def job(arg):
     inst, bar = arg
     d = get("/api/v5/market/candles", {"instId": inst, "bar": bar, "limit": "300"})
     time.sleep(0.2)
     return inst, bar, check(d)
+
+
+def tv_job(inst):
+    d = get("/api/v5/market/candles", {"instId": inst, "bar": "1m", "limit": "20"})
+    time.sleep(0.2)
+    return inst, (tv_info(d) if d else None)
 
 
 def send(token, chat_id, text):
@@ -125,14 +161,25 @@ def main():
             if res:
                 by[inst]["res"][bar] = res
 
-    now = datetime.now(KST)
-    hits = [c for c in coins if c["res"]]
+    # 패턴이 잡힌 종목만 1분 거래대금 5칸을 추가로 받아 늘고 있는지 본다
+    cand = [c for c in coins if c["res"]]
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for inst, info in ex.map(tv_job, [c["id"] for c in cand]):
+            if info:
+                by[inst].update(info)
+    hits = []
+    for c in cand:
+        if DROP_FALLING and c.get("trend") == "down":
+            continue
+        hits.append(c)
     for c in hits:
         del c["id"]
+
+    now = datetime.now(KST)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     json.dump({"updated_at": now.isoformat(timespec="seconds"), "scanned": len(coins), "coins": hits},
               open(OUT, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
-    print(f"{len(coins)}종목 검사 · 200선 패턴 {len(hits)}종목")
+    print(f"{len(coins)}종목 검사 · 200선 패턴 {len(cand)}종목 · 거래대금 감소 제외 후 {len(hits)}종목")
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
