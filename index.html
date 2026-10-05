@@ -10,7 +10,8 @@
   h1{margin:0 0 6px;font-size:15px}
   h1 span{color:#D6B15E}
   #st{color:#6E8195;font-size:12px;margin-bottom:8px}
-  button,select{background:#131C26;color:#C9D6E2;border:1px solid #22303E;border-radius:4px;padding:6px 10px;font:inherit}
+  button,select,input#q{background:#131C26;color:#C9D6E2;border:1px solid #22303E;border-radius:4px;padding:6px 10px;font:inherit}
+  input#q{width:130px;margin-left:6px}
   label{margin-left:10px;font-size:12px;color:#6E8195}
   .wrap{overflow:auto}
   table{border-collapse:separate;border-spacing:0;white-space:nowrap}
@@ -49,6 +50,7 @@
     <option value="fresh">정렬: 방금 넘은 순</option>
     <option value="chg">정렬: 24시간 상승률순</option>
   </select>
+  <input id="q" type="text" placeholder="코인 검색 (예: MON)" autocomplete="off" autocapitalize="characters">
   <label><input type="checkbox" id="all"> 돌파 없는 코인도 보기</label>
 </header>
 <div class="wrap" id="out"><div class="empty">불러오는 중...</div></div>
@@ -235,6 +237,7 @@ function hiGaps(c) {
 function render() {
   const all = document.getElementById("all").checked;
   const sortBy = document.getElementById("sort").value;
+  const q = document.getElementById("q").value.trim().toUpperCase();
   let r = cs.map(c => {
     let best = 9, n = 0;
     TF.forEach(([bar]) => {
@@ -251,7 +254,8 @@ function render() {
   });
   const hitV = r.filter(x => x.n > 0).length;
   const hitH = r.filter(x => x.nh > 0).length;
-  if (!all) r = r.filter(x => x.n > 0 || x.nh > 0);
+  if (q) r = r.filter(x => x.c.sym.toUpperCase().includes(q));   // 검색 중이면 돌파 없는 코인도 보여준다
+  else if (!all) r = r.filter(x => x.n > 0 || x.nh > 0);
   if (sortBy === "fresh") r.sort((a, b) => a.fresh - b.fresh || b.c.vol - a.c.vol);
   else if (sortBy === "tvx") r.sort((a, b) => (b.c.tv1x == null ? -1 : b.c.tv1x) - (a.c.tv1x == null ? -1 : a.c.tv1x));
   else if (sortBy === "chg") r.sort((a, b) => b.c.chg - a.c.chg);
@@ -260,7 +264,9 @@ function render() {
   st(source + " " + doneAt + " · 상위 " + cs.length + "종목 중 VWAP 돌파 " + hitV + " · 전고점 돌파 " + hitH + (priceAt ? " · 현재가 " + priceAt : ""));
   const out = document.getElementById("out");
   if (!r.length) {
-    out.innerHTML = '<div class="empty">지금 막 VWAP이나 전고점을 뚫은 코인이 없어요.</div>';
+    out.innerHTML = q
+      ? '<div class="empty">"' + q + '" 코인이 이 표에 없어요.<br>이 표는 1분 거래대금이 늘어난 상위 ' + cs.length + '개만 보여줘요.</div>'
+      : '<div class="empty">지금 막 VWAP이나 전고점을 뚫은 코인이 없어요.</div>';
     return;
   }
   let h = '<table><thead><tr><th class="coin">코인</th><th>현재가</th><th>24시간</th>';
@@ -309,6 +315,7 @@ function render() {
 document.getElementById("go").addEventListener("click", () => refresh(true));
 document.getElementById("all").addEventListener("change", () => { if (cs.length) render(); });
 document.getElementById("sort").addEventListener("change", () => { if (cs.length) render(); });
+document.getElementById("q").addEventListener("input", () => { if (cs.length) render(); });
 refresh(false);
 setInterval(() => refresh(false), 120000);   // 서버 결과 다시 읽기
 setInterval(refreshPrices, 60000);            // 현재가 1분마다
