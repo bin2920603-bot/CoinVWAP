@@ -78,7 +78,7 @@ def main():
         sym = c["sym"]
         chg = c.get("chg", 0)
         x = c.get("tv1x")
-        if x is None or x < TVX_MIN or not rising(c):
+        if x is None or x < TVX_MIN:
             continue
         for bar in BARS:
             r = (c.get("res") or {}).get(bar)
