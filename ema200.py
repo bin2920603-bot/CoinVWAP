@@ -14,9 +14,10 @@ STATE = os.path.join(ROOT, "data", "notified_ema200.json")
 BARS = ["1m", "5m", "15m"]
 NAMES = {"1m": "1분", "5m": "5분", "15m": "15분"}
 TOP = 60          # 하루 거래대금 상위 몇 개를 볼지
-MAXGAP = 2.0      # 200선 위로 이만큼(%) 이내일 때만 잡는다
+MAXGAP = 1.0      # 200선 위로 이만큼(%) 이내일 때만 잡는다
 TOUCH = 0.3       # 저가가 200선 위 이만큼(%) 이내까지 내려왔으면 '닿았다'
-BACK = 40         # 최근 몇 봉 안에서 닿았는지 본다
+BACK = 6          # 터치가 이 봉 수 이내(0~5봉 전)일 때만 잡는다
+ALLOW = ("7>20", "7>20>50")   # 정배열이 완성되기 전(노랑·주황) 단계만 잡는다
 COOLDOWN_H = 3    # 같은 종목·같은 봉은 이 시간 안에 다시 알리지 않는다
 MAX_LINES = 15
 PAGE = "https://bin2920603-bot.github.io/CoinVWAP/ema200.html"
@@ -77,6 +78,8 @@ def check(d):
         stage = "7>20>50"
         if e50[L] > e200[L]:
             stage = "7>20>50>200"
+    if stage not in ALLOW:
+        return None
     return {"gap": round(gap, 2), "touch": touched, "stage": stage}
 
 
