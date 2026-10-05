@@ -27,6 +27,12 @@ jobs:
           m=$(TZ=Asia/Seoul date +%M)
           if [ $((10#$m % 15)) -lt 3 ]; then echo "tf=1" >> $GITHUB_OUTPUT; else echo "tf=0" >> $GITHUB_OUTPUT; fi
       - run: python vwap.py
+      - name: 200선
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python ema200.py
       - name: 타점 계산
         if: steps.t.outputs.tf == '1'
         run: python setup_tf.py
