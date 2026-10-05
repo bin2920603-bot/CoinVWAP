@@ -25,6 +25,8 @@
   .s2{background:rgba(240,150,60,.22);color:#F0963C}
   .s3{background:rgba(242,96,108,.28);color:#F2606C;font-weight:700}
   .sub{display:block;font-size:11px;opacity:.8}
+  .tup{background:rgba(242,96,108,.22);color:#F2606C;font-weight:700}
+  .tdn{background:rgba(77,146,240,.18);color:#4D92F0}
   .empty{padding:30px 16px;color:#6E8195;line-height:1.7}
 </style>
 </head>
@@ -53,6 +55,12 @@ function fmtP(p) {
   if (p >= 100) return p.toFixed(2);
   if (p >= 1) return p.toFixed(4);
   return p.toPrecision(4);
+}
+function fmtV(v) {
+  if (v == null) return "–";
+  if (v >= 1e8) return (v / 1e8).toFixed(1) + "억";
+  if (v >= 1e4) return Math.round(v / 1e4) + "만";
+  return String(Math.round(v));
 }
 
 async function load() {
@@ -94,6 +102,7 @@ function render() {
     return;
   }
   let h = '<table><thead><tr><th class="coin">코인</th><th>현재가</th><th>24시간</th>';
+  h += "<th>1분 전</th><th>2분 전</th><th>3분 전</th><th>4분 전</th><th>5분 전</th><th>증감</th>";
   BARS.forEach(([b, n]) => h += "<th>" + n + "봉</th>");
   h += "</tr></thead><tbody>";
   r.forEach(({c}) => {
@@ -102,6 +111,16 @@ function render() {
     h += '<tr><td class="coin"><a href="' + url + '" target="_blank" rel="noopener">' + c.sym + "</a></td>";
     h += "<td>" + fmtP(c.last) + "</td>";
     h += '<td class="' + cls + '">' + (c.chg > 0 ? "+" : "") + c.chg.toFixed(1) + "%</td>";
+    // 1분 거래대금 5칸: 직전(오른쪽) 분보다 늘었으면 빨강, 줄었으면 파랑
+    const v = c.tv1s || [];
+    for (let i = 0; i < 5; i++) {
+      const a = v[i], p = v[i + 1];
+      const k = (a == null || p == null || a === p) ? "" : a > p ? "up" : "down";
+      h += '<td class="' + k + '">' + fmtV(a) + "</td>";
+    }
+    if (c.trend === "up") h += '<td class="tup">증가</td>';
+    else if (c.trend === "down") h += '<td class="tdn">감소</td>';
+    else h += '<td class="dim">–</td>';
     BARS.forEach(([b]) => {
       const x = c.res[b];
       if (!x) { h += '<td class="dim">–</td>'; return; }
