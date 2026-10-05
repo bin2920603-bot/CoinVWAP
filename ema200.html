@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>200선 터치 후 상승 · OKX 선물</title>
+<style>
+  body{margin:0;background:#0E141B;color:#C9D6E2;font:13px system-ui,"Malgun Gothic",sans-serif}
+  header{position:sticky;top:0;z-index:5;background:#0E141B;padding:12px;border-bottom:1px solid #22303E}
+  h1{margin:0 0 6px;font-size:15px}
+  h1 span{color:#D6B15E}
+  #st{color:#6E8195;font-size:12px;margin-bottom:8px}
+  select,input#q{background:#131C26;color:#C9D6E2;border:1px solid #22303E;border-radius:4px;padding:6px 10px;font:inherit}
+  input#q{width:130px;margin-left:6px}
+  .wrap{overflow:auto}
+  table{border-collapse:separate;border-spacing:0;white-space:nowrap}
+  th,td{padding:0 10px;height:44px;border-bottom:1px solid #1A2530;text-align:center}
+  th{position:sticky;top:0;background:#131C26;color:#6E8195;font-weight:500;font-size:11px;z-index:2}
+  td.coin,th.coin{position:sticky;left:0;background:#0E141B;text-align:left;border-right:1px solid #22303E;z-index:3}
+  th.coin{background:#131C26;z-index:4}
+  td.coin a{color:#C9D6E2;text-decoration:none}
+  .up{color:#F2606C}.down{color:#4D92F0}
+  .dim{color:#2C3A48}
+  .s1{background:rgba(232,193,90,.14);color:#E8C15A}
+  .s2{background:rgba(240,150,60,.22);color:#F0963C}
+  .s3{background:rgba(242,96,108,.28);color:#F2606C;font-weight:700}
+  .sub{display:block;font-size:11px;opacity:.8}
+  .empty{padding:30px 16px;color:#6E8195;line-height:1.7}
+</style>
+</head>
+<body>
+<header>
+  <h1>200선 터치 후 상승 <span>OKX 선물</span></h1>
+  <div id="st">준비 중</div>
+  <select id="sort">
+    <option value="stage">정렬: 정배열 많이 된 순</option>
+    <option value="near">정렬: 200선에 가까운 순</option>
+    <option value="chg">정렬: 24시간 상승률순</option>
+  </select>
+  <input id="q" type="text" placeholder="코인 검색 (예: SHIB)" autocomplete="off" autocapitalize="characters">
+</header>
+<div class="wrap" id="out"><div class="empty">불러오는 중...</div></div>
+
+<script>
+const BARS = [["1m","1분"],["5m","5분"],["15m","15분"]];
+const RANK = {"7>20":1, "7>20>50":2, "7>20>50>200":3};
+let coins = [], meta = "";
+
+const hm = d => String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+function fmtP(p) {
+  if (!(p > 0)) return "–";
+  if (p >= 1000) return p.toFixed(1);
+  if (p >= 100) return p.toFixed(2);
+  if (p >= 1) return p.toFixed(4);
+  return p.toPrecision(4);
+}
+
+async function load() {
+  try {
+    const r = await fetch("data/ema200.json?t=" + Date.now(), {cache: "no-store"});
+    if (!r.ok) throw 0;
+    const j = await r.json();
+    coins = j.coins || [];
+    meta = "서버 결과 " + hm(new Date(j.updated_at)) + " · 상위 " + j.scanned + "종목 중 " + coins.length + "종목";
+    render();
+  } catch (e) {
+    document.getElementById("st").textContent = "결과 파일이 아직 없어요. 몇 분 뒤에 다시 열어 주세요";
+    document.getElementById("out").innerHTML = '<div class="empty">서버가 첫 결과를 만드는 중이에요.</div>';
+  }
+}
+
+function best(c) {
+  let s = 0, g = 99;
+  BARS.forEach(([b]) => {
+    const x = c.res[b];
+    if (x) { s = Math.max(s, RANK[x.stage] || 0); g = Math.min(g, x.gap); }
+  });
+  return {s: s, g: g};
+}
+
+function render() {
+  const q = document.getElementById("q").value.trim().toUpperCase();
+  const sortBy = document.getElementById("sort").value;
+  let r = coins.map(c => ({c: c, b: best(c)}));
+  if (q) r = r.filter(x => x.c.sym.toUpperCase().includes(q));
+  if (sortBy === "near") r.sort((a, b) => a.b.g - b.b.g);
+  else if (sortBy === "chg") r.sort((a, b) => b.c.chg - a.c.chg);
+  else r.sort((a, b) => b.b.s - a.b.s || a.b.g - b.b.g);
+
+  document.getElementById("st").textContent = meta;
+  const out = document.getElementById("out");
+  if (!r.length) {
+    out.innerHTML = '<div class="empty">' + (q ? '"' + q + '" 코인이 이 표에 없어요.' : "지금 200선을 터치하고 올라오는 코인이 없어요.") + "</div>";
+    return;
+  }
+  let h = '<table><thead><tr><th class="coin">코인</th><th>현재가</th><th>24시간</th>';
+  BARS.forEach(([b, n]) => h += "<th>" + n + "봉</th>");
+  h += "</tr></thead><tbody>";
+  r.forEach(({c}) => {
+    const url = "https://www.okx.com/trade-swap/" + c.sym.toLowerCase() + "-usdt-swap";
+    const cls = c.chg > 0 ? "up" : c.chg < 0 ? "down" : "";
+    h += '<tr><td class="coin"><a href="' + url + '" target="_blank" rel="noopener">' + c.sym + "</a></td>";
+    h += "<td>" + fmtP(c.last) + "</td>";
+    h += '<td class="' + cls + '">' + (c.chg > 0 ? "+" : "") + c.chg.toFixed(1) + "%</td>";
+    BARS.forEach(([b]) => {
+      const x = c.res[b];
+      if (!x) { h += '<td class="dim">–</td>'; return; }
+      const k = x.touch === 0 ? "지금" : x.touch + "봉전";
+      h += '<td class="s' + (RANK[x.stage] || 1) + '">200선 위 +' + x.gap.toFixed(1) + "%"
+        + '<span class="sub">' + x.stage + " · 터치 " + k + "</span></td>";
+    });
+    h += "</tr>";
+  });
+  h += "</tbody></table>";
+  out.innerHTML = h;
+}
+
+document.getElementById("sort").addEventListener("change", render);
+document.getElementById("q").addEventListener("input", render);
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
