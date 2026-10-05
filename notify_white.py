@@ -15,7 +15,7 @@ SRC = os.path.join(ROOT, "data", "vwap.json")
 STATE = os.path.join(ROOT, "data", "notified_white.json")
 BARS = ["5m", "15m"]
 NAMES = {"5m": "5분", "15m": "15분"}
-TVX_MIN = 1.0
+TVX_MIN = 2.0
 COOLDOWN_H = 3
 MAX_LINES = 15
 PAGE = "https://bin2920603-bot.github.io/CoinVWAP/"
@@ -78,7 +78,7 @@ def main():
         sym = c["sym"]
         chg = c.get("chg", 0)
         x = c.get("tv1x")
-        if x is None or x < TVX_MIN:
+        if x is None or x < TVX_MIN or not rising(c):
             continue
         for bar in BARS:
             r = (c.get("res") or {}).get(bar)
@@ -87,4 +87,25 @@ def main():
             key = f"w:{bar}:{sym}"
             if cooled(key):
                 continue
-            lines.append(f"{NAMES[bar]} · {sym} VWAP 아래에
+            lines.append(f"{NAMES[bar]} · {sym} VWAP 아래에서 뚫음 (지금) | 24시간 {chg:+.1f}% | 1분 거래대금 {x}배")
+            new_keys.append(key)
+
+    if lines:
+        more = f"\n(그 외 {len(lines) - MAX_LINES}개는 화면에서 확인)" if len(lines) > MAX_LINES else ""
+        names = ", ".join(sorted({l.split(" · ")[1].split(" ")[0] for l in lines[:MAX_LINES]}))
+        text = "❕ [거가중] " + names + " 아래에서 뚫음\n" + "\n".join(lines[:MAX_LINES]) + more + "\n\n" + PAGE
+        if send(token, chat_id, text):
+            for k in new_keys:
+                sent[k] = now.isoformat(timespec="seconds")
+            print(f"흰 느낌표 알림 {len(new_keys)}건 보냄")
+        else:
+            print("흰 느낌표 알림 전송 실패 · 다음 번에 다시 시도")
+    else:
+        print("흰 느낌표 알림: 새로 알릴 것 없음")
+
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    json.dump(state, open(STATE, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
+
+
+if __name__ == "__main__":
+    main()
