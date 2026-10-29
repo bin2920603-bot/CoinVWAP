@@ -1,6 +1,7 @@
 import os, json, time
 import requests
-from chartpush import get_candles, make_chart, ema_full, rsi6, fmt_usdt, BAR_MS
+from chartpush import (candles_cached, make_chart, ema_full, rsi6, fmt_usdt,
+                       BAR_MS, vol_trend, trend_of, TREND_TXT)
 
 HOSTS = ["https://www.okx.com", "https://aws.okx.com"]
 NL = chr(10)
@@ -26,12 +27,8 @@ STOP_PCT = {"1m": 1.0, "5m": 1.5, "15m": 2.0}
 STOP_DEFAULT = 3.0
 STOP_BARS = 10
 VOL_AVG = 20
-TURN_UP = 1.2
-TURN_DOWN = 0.8
-TREND_TXT = {"up": "📈상승", "down": "📉하락", "mix": "↔️혼조", None: "-"}
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(ROOT, "data", "short.json")
-_cache = {}
 
 
 def get(path, params=None):
@@ -45,14 +42,6 @@ def get(path, params=None):
         except Exception:
             pass
     return None
-
-
-def candles(inst, bar):
-    key = (inst, bar)
-    if key not in _cache:
-        _cache[key] = get_candles(inst, bar)
-        time.sleep(0.15)
-    return _cache[key]
 
 
 def vwap_at(cs, i):
@@ -170,7 +159,7 @@ def verdict_short(cs, bar):
         elif pct >= lim:
             why.append("손절폭 " + format(pct, "+.1f") + "%")
         if why:
-            return "🧭 ❌ 패스: " + " · ".join(why)
+            return "🧭 ❌ 숏 패스: " + " · ".join(why)
         return ("🧭 ✅ 숏 후보 (거래량 ×" + format(vx, ".1f")
                 + " · 손절 " + format(pct, "+.1f") + "%)")
     except Exception as e:
@@ -178,48 +167,10 @@ def verdict_short(cs, bar):
         return None
 
 
-def vol_trend(raw):
-    try:
-        done = [x for x in raw if x[8] == "1"]
-        if len(done) < 8:
-            return None
-        a = sum(float(x[7]) for x in done[:3]) / 3
-        b = sum(float(x[7]) for x in done[3:8]) / 5
-        if b <= 0:
-            return None
-        r = a / b
-        if r >= TURN_UP:
-            t = "📈늘어나는 중"
-        elif r <= TURN_DOWN:
-            t = "📉줄어드는 중"
-        else:
-            t = "➖비슷함"
-        return "💰 거래대금 " + t + " (최근 3봉이 그 전 5봉의 ×" + format(r, ".1f") + ")"
-    except Exception:
-        return None
-
-
-def trend_of(raw):
-    try:
-        closes = [float(x[4]) for x in reversed(raw)]
-        e20 = ema_full(closes, 20)
-        e50 = ema_full(closes, 50)
-        if e20[-1] is None or e50[-1] is None:
-            return None
-        c = closes[-1]
-        if c > e20[-1] > e50[-1]:
-            return "up"
-        if c < e20[-1] < e50[-1]:
-            return "down"
-        return "mix"
-    except Exception:
-        return None
-
-
 def big_picture(inst):
     out = {}
     for bar in ("1D", "4H", "1H"):
-        raw = candles(inst, bar)
+        raw = candles_cached(inst, bar)
         out[bar] = trend_of(raw) if raw else None
     return out
 
@@ -235,6 +186,18 @@ def classify_short(t):
     if h4 == "down" and h1 == "down":
         return "🟠 추세 전환 초기 (찐 하락 가능성, 일봉 확인 필요)"
     return "🟡 기술적 하락 (큰 틀은 위, 짧게 꺾이는 중)"
+
+
+def warn_short(tr):
+    bad = []
+    if tr["1D"] == "up":
+        bad.append("일봉")
+    if tr["4H"] == "up":
+        bad.append("4시간")
+    if bad:
+        return ("⚠️ 역추세 주의: " + "·".join(bad)
+                + "이 상승인데 숏이에요 (급반등에 손절 주의)")
+    return None
 
 
 def send_photo(token, chat, path, caption):
@@ -293,7 +256,7 @@ def main():
         for bar, label in BARS:
             if count >= MAX_ALERTS:
                 break
-            raw = candles(inst, bar)
+            raw = candles_cached(inst, bar)
             if not raw:
                 continue
             cs = list(reversed(raw))
@@ -310,7 +273,7 @@ def main():
             if pick is None:
                 continue
             key, text = pick
-            lines = ["🔻 " + label + " · " + sym + " " + text]
+            lines = ["🔻 숏 타점", label + " · " + sym + " " + text]
             v = verdict_short(cs, bar)
             if v:
                 lines.append(v)
@@ -320,6 +283,9 @@ def main():
             tr = big_picture(inst)
             lines.append("🔭 큰 틀: 일봉 " + TREND_TXT[tr["1D"]] + " · 4시간 "
                          + TREND_TXT[tr["4H"]] + " · 1시간 " + TREND_TXT[tr["1H"]])
+            w = warn_short(tr)
+            if w:
+                lines.append(w)
             lines.append(classify_short(tr))
             cap = NL.join(lines)
             png = make_chart(raw, sym, bar, "/tmp/short_" + str(count) + ".png")
