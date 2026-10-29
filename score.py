@@ -61,12 +61,14 @@ def record(cap):
     lines = [s.strip() for s in cap.split(NL) if s.strip()]
     if not lines:
         return
-    if "롱 타점" in lines[0]:
+    h = lines[0]
+    if "롱 타점" in h or "롱 신호" in h:
         direction = "long"
-    elif "숏 타점" in lines[0]:
+    elif "숏 타점" in h or "숏 신호" in h:
         direction = "short"
     else:
         return
+    v = "ok" if "타점" in h else "pass"
     sym, bar, ev = None, None, ""
     for s in lines[1:]:
         m = RE_A.search(s)
@@ -87,14 +89,6 @@ def record(cap):
     for key, name in KINDS:
         if key in ev:
             kind = name
-            break
-    v = "none"
-    for s in lines:
-        if "🧭" in s:
-            if "✅" in s:
-                v = "ok"
-            elif "❌" in s:
-                v = "pass"
             break
     p0 = last_price(sym)
     if p0 is None:
@@ -141,13 +135,13 @@ def evaluate(items, now):
         p0 = it["p0"]
         res = "none"
         for c in cs:
-            h, l = float(c[2]), float(c[3])
+            hi, lo = float(c[2]), float(c[3])
             if it["dir"] == "long":
-                hit_stop = l <= p0 * (1 - STOP / 100)
-                hit_tgt = h >= p0 * (1 + TARGET / 100)
+                hit_stop = lo <= p0 * (1 - STOP / 100)
+                hit_tgt = hi >= p0 * (1 + TARGET / 100)
             else:
-                hit_stop = h >= p0 * (1 + STOP / 100)
-                hit_tgt = l <= p0 * (1 - TARGET / 100)
+                hit_stop = hi >= p0 * (1 + STOP / 100)
+                hit_tgt = lo <= p0 * (1 - TARGET / 100)
             if hit_stop:
                 res = "loss"
                 break
@@ -178,13 +172,13 @@ def build_report(items):
            "기준: 알림 가격에서 " + str(WINDOW_H) + "시간 안에 +" + str(TARGET)
            + "%(숏은 -" + str(TARGET) + "%)를 먼저 가면 성공, 반대로 " + str(STOP)
            + "%를 먼저 가면 실패 (같은 봉이면 실패)", ""]
-    groups = [("🟢 롱 ✅후보", "long", "ok"), ("🟢 롱 ❌패스", "long", "pass"),
-              ("🔻 숏 ✅후보", "short", "ok"), ("🔻 숏 ❌패스", "short", "pass")]
+    groups = [("🟢 롱 타점", "long", "ok"), ("🟡 롱 관망(타점 아님)", "long", "pass"),
+              ("🔻 숏 타점", "short", "ok"), ("🟡 숏 관망(타점 아님)", "short", "pass")]
     for title, d, v in groups:
         its = [i for i in items if i["dir"] == d and i["v"] == v]
         out.append(row(title, its))
     out.append("")
-    out.append("종류별 (✅후보만)")
+    out.append("종류별 (타점만)")
     seen = []
     for i in items:
         key = (i["dir"], i["kind"])
@@ -194,6 +188,7 @@ def build_report(items):
         its = [i for i in items if i["dir"] == d and i["kind"] == kind and i["v"] == "ok"]
         out.append(row(("🟢 " if d == "long" else "🔻 ") + kind, its))
     out.append("")
+    out.append("※ 타점의 성공률이 관망보다 높아야 기준이 쓸모 있어요.")
     out.append("※ 건수가 적으면 믿지 마세요. 최소 30건은 모여야 의미가 있어요.")
     return NL.join(out)
 
