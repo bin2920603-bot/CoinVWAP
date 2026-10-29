@@ -1,7 +1,8 @@
 import os, json, time
 import requests
-from chartpush import (candles_cached, make_chart, ema_full, rsi6, fmt_usdt,
-                       BAR_MS, vol_trend, trend_of, TREND_TXT)
+from chartpush import (candles_cached, make_chart, ema_full, rsi6, BAR_MS,
+                       vol_trend, TREND_TXT, verdict, big_picture,
+                       counter_of, counter_line)
 
 HOSTS = ["https://www.okx.com", "https://aws.okx.com"]
 NL = chr(10)
@@ -20,12 +21,6 @@ BACK = 6
 PRE = 5
 NEAR = 0.15
 VWAP_VOL_MIN = 1.5
-CHK_VOL = 1.5
-CHK_TURN = {"1m": 100000, "5m": 300000}
-CHK_TURN_DEFAULT = 1000000
-STOP_PCT = {"1m": 1.0, "5m": 1.5, "15m": 2.0}
-STOP_DEFAULT = 3.0
-STOP_BARS = 10
 VOL_AVG = 20
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(ROOT, "data", "short.json")
@@ -53,7 +48,7 @@ def vwap_at(cs, i):
     return pv / v
 
 
-def vol_stats(cs, bar):
+def vol_ratio(cs, bar):
     n = len(cs)
     dur = BAR_MS.get(bar, 3600000)
     elapsed = int(time.time() * 1000) - int(cs[-1][0])
@@ -65,10 +60,9 @@ def vol_stats(cs, bar):
     else:
         ki, scale = n - 1, 1.0
     cur_vol = float(cs[ki][5]) * scale
-    cur_turn = float(cs[ki][7]) * scale
     past = [float(x[5]) for x in cs[max(0, ki - VOL_AVG):ki]]
     avg = sum(past) / len(past) if past else 0
-    return ki, (cur_vol / avg if avg > 0 else 0), cur_turn
+    return cur_vol / avg if avg > 0 else 0
 
 
 def detect(cs, bar):
@@ -78,7 +72,7 @@ def detect(cs, bar):
     L = n - 1
     closes = [float(x[4]) for x in cs]
     highs = [float(x[2]) for x in cs]
-    ki, vx, cur_turn = vol_stats(cs, bar)
+    vx = vol_ratio(cs, bar)
 
     now_r = rsi6(closes)
     prev_r = rsi6(closes[:-1])
@@ -134,47 +128,6 @@ def detect(cs, bar):
     return hits
 
 
-def verdict_short(cs, bar):
-    try:
-        closes = [float(x[4]) for x in cs]
-        ki, vx, cur_turn = vol_stats(cs, bar)
-        why = []
-        r = rsi6(closes)
-        if r is not None and r >= RSI_HI:
-            why.append("RSI6 " + format(r, ".0f") + "(70 이상)")
-        e7 = ema_full(closes, 7)
-        if e7[-1] is not None and closes[-1] >= e7[-1]:
-            why.append("EMA7 위")
-        if vx < CHK_VOL:
-            why.append("거래량 ×" + format(vx, ".1f"))
-        need = CHK_TURN.get(bar, CHK_TURN_DEFAULT)
-        if cur_turn < need:
-            why.append("거래대금 " + fmt_usdt(cur_turn))
-        price = closes[-1]
-        high_n = max(float(x[2]) for x in cs[max(0, ki - STOP_BARS):ki])
-        pct = (high_n / price - 1) * 100
-        lim = STOP_PCT.get(bar, STOP_DEFAULT)
-        if high_n <= price:
-            why.append("손절 계산 불가")
-        elif pct >= lim:
-            why.append("손절폭 " + format(pct, "+.1f") + "%")
-        if why:
-            return "🧭 ❌ 숏 패스: " + " · ".join(why)
-        return ("🧭 ✅ 숏 후보 (거래량 ×" + format(vx, ".1f")
-                + " · 손절 " + format(pct, "+.1f") + "%)")
-    except Exception as e:
-        print("판정 오류:", type(e).__name__)
-        return None
-
-
-def big_picture(inst):
-    out = {}
-    for bar in ("1D", "4H", "1H"):
-        raw = candles_cached(inst, bar)
-        out[bar] = trend_of(raw) if raw else None
-    return out
-
-
 def classify_short(t):
     d, h4, h1 = t["1D"], t["4H"], t["1H"]
     if d is None:
@@ -186,18 +139,6 @@ def classify_short(t):
     if h4 == "down" and h1 == "down":
         return "🟠 추세 전환 초기 (찐 하락 가능성, 일봉 확인 필요)"
     return "🟡 기술적 하락 (큰 틀은 위, 짧게 꺾이는 중)"
-
-
-def warn_short(tr):
-    bad = []
-    if tr["1D"] == "up":
-        bad.append("일봉")
-    if tr["4H"] == "up":
-        bad.append("4시간")
-    if bad:
-        return ("⚠️ 역추세 주의: " + "·".join(bad)
-                + "이 상승인데 숏이에요 (급반등에 손절 주의)")
-    return None
 
 
 def send_photo(token, chat, path, caption):
@@ -273,26 +214,31 @@ def main():
             if pick is None:
                 continue
             key, text = pick
-            lines = ["🔻 숏 타점", label + " · " + sym + " " + text]
-            v = verdict_short(cs, bar)
-            if v:
-                lines.append(v)
+            tr = big_picture(inst)
+            ok, vline, tline = verdict(raw, bar, "short")
+            bad = counter_of(tr, "short")
+            is_tp = ok and not bad
+            lines = ["🔻 숏 타점" if is_tp else "🟡 숏 신호 (관망)",
+                     label + " · " + sym + " " + text]
+            if vline:
+                lines.append(vline)
+            if tline:
+                lines.append(tline)
             vt = vol_trend(raw)
             if vt:
                 lines.append(vt)
-            tr = big_picture(inst)
             lines.append("🔭 큰 틀: 일봉 " + TREND_TXT[tr["1D"]] + " · 4시간 "
                          + TREND_TXT[tr["4H"]] + " · 1시간 " + TREND_TXT[tr["1H"]])
-            w = warn_short(tr)
-            if w:
-                lines.append(w)
+            cl = counter_line(bad, "short")
+            if cl:
+                lines.append(cl)
             lines.append(classify_short(tr))
             cap = NL.join(lines)
             png = make_chart(raw, sym, bar, "/tmp/short_" + str(count) + ".png")
-            ok = send_photo(token, chat, png, cap) if png else False
-            if not ok:
-                ok = send_text(token, chat, cap)
-            if ok:
+            sent_ok = send_photo(token, chat, png, cap) if png else False
+            if not sent_ok:
+                sent_ok = send_text(token, chat, cap)
+            if sent_ok:
                 sent[key] = now
                 count += 1
                 time.sleep(1)
