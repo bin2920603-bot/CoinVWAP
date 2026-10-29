@@ -8,8 +8,18 @@ CHART_BARS = 80
 VWAP_N = 100
 BAR_CODE = {"1분": "1m", "5분": "5m", "15분": "15m", "1시간": "1H",
             "4시간": "4H", "일봉": "1D", "주봉": "1W", "월봉": "1M"}
+BAR_MS = {"1m": 60000, "5m": 300000, "15m": 900000, "1H": 3600000,
+          "4H": 14400000, "1D": 86400000, "1W": 604800000, "1M": 2592000000}
 TAGS = [("거가중 1분", "⚡"), ("거가중", "❕"), ("200선", "❗"),
-        ("VWAP 돌파", "📈"), ("전고점", "🚀"), ("뚫은 직후", "🔔")]
+        ("VWAP 돌파", "📈"), ("전고점", "🚀"), ("뚫은 직후", "🔔"),
+        ("정배열 시작", "🟢"), ("역배열 시작", "🔴")]
+CHK_VOL = 1.5
+CHK_TURN = {"1m": 100000, "5m": 300000}
+CHK_TURN_DEFAULT = 1000000
+STOP_PCT = {"1m": 1.0, "5m": 1.5, "15m": 2.0}
+STOP_DEFAULT = 3.0
+STOP_BARS = 10
+VOL_AVG = 20
 RE_A = re.compile(r"^(1분|5분|15분|1시간|4시간|일봉|주봉|월봉) · (\S+)")
 RE_B = re.compile(r"^(\S+) (일봉|1시간) .*고점 돌파")
 RE_C = re.compile(r"^(\S+) 거가중 위")
@@ -68,6 +78,80 @@ def ema_full(values, n):
         e = v * k + e * (1 - k)
         out.append(e)
     return out
+
+
+def rsi6(closes):
+    n = 6
+    if len(closes) < n + 2:
+        return None
+    gains = [max(closes[i] - closes[i - 1], 0) for i in range(1, len(closes))]
+    losses = [max(closes[i - 1] - closes[i], 0) for i in range(1, len(closes))]
+    ag = sum(gains[:n]) / n
+    al = sum(losses[:n]) / n
+    out = 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+    for i in range(n + 1, len(gains) + 1):
+        ag = (ag * (n - 1) + gains[i - 1]) / n
+        al = (al * (n - 1) + losses[i - 1]) / n
+        out = 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+    return out
+
+
+def fmt_usdt(v):
+    if v >= 100000000:
+        return format(v / 100000000, ".1f") + "억"
+    if v >= 10000:
+        return format(v / 10000, ",.0f") + "만"
+    return format(v, ",.0f")
+
+
+def verdict(raw, bar):
+    try:
+        cs = list(reversed(raw))
+        n = len(cs)
+        if n < 40:
+            return None
+        closes = [float(x[4]) for x in cs]
+        why = []
+        r = rsi6(closes)
+        if r is not None and r <= 30:
+            why.append("RSI6 " + format(r, ".0f") + "(30 이하)")
+        e7 = ema_full(closes, 7)
+        if e7[-1] is not None and closes[-1] <= e7[-1]:
+            why.append("EMA7 아래")
+        dur = BAR_MS.get(bar, 3600000)
+        elapsed = int(time.time() * 1000) - int(cs[-1][0])
+        live = cs[-1][8] == "0"
+        if live and elapsed < dur * 0.1:
+            ki, scale = n - 2, 1.0
+        elif live:
+            ki, scale = n - 1, dur / min(elapsed, dur)
+        else:
+            ki, scale = n - 1, 1.0
+        cur_vol = float(cs[ki][5]) * scale
+        cur_turn = float(cs[ki][7]) * scale
+        past = [float(x[5]) for x in cs[max(0, ki - VOL_AVG):ki]]
+        avg = sum(past) / len(past) if past else 0
+        vx = cur_vol / avg if avg > 0 else 0
+        if vx < CHK_VOL:
+            why.append("거래량 ×" + format(vx, ".1f"))
+        need = CHK_TURN.get(bar, CHK_TURN_DEFAULT)
+        if cur_turn < need:
+            why.append("거래대금 " + fmt_usdt(cur_turn))
+        price = closes[-1]
+        low_n = min(float(x[3]) for x in cs[max(0, ki - STOP_BARS):ki])
+        pct = (low_n / price - 1) * 100
+        lim = STOP_PCT.get(bar, STOP_DEFAULT)
+        if low_n >= price:
+            why.append("손절 계산 불가")
+        elif pct <= -lim:
+            why.append("손절폭 " + format(pct, ".1f") + "%")
+        if why:
+            return "🧭 ❌ 패스: " + " · ".join(why)
+        return ("🧭 ✅ 진입 후보 (거래량 ×" + format(vx, ".1f")
+                + " · 손절 " + format(pct, ".1f") + "%)")
+    except Exception as e:
+        print("판정 오류:", type(e).__name__)
+        return None
 
 
 def make_chart(raw, sym, bar, path):
@@ -159,9 +243,14 @@ def handle(url, data):
         if raw:
             png = make_chart(raw, sym, bar, "/tmp/cp_" + str(n) + ".png")
         if png:
+            full_cap = cap
+            if "역배열" not in cap:
+                v = verdict(raw, bar)
+                if v:
+                    full_cap = cap + NL + v
             try:
                 with open(png, "rb") as f:
-                    r = _real_post(photo_url, data={"chat_id": chat, "caption": cap[:1000]},
+                    r = _real_post(photo_url, data={"chat_id": chat, "caption": full_cap[:1000]},
                                    files={"photo": f}, timeout=30)
                 if r.status_code == 200:
                     last = r
