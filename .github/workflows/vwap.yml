@@ -46,6 +46,12 @@ jobs:
           python chartpush.py notify_white.py || true
           python chartpush.py vwap1m.py || true
           if [ "${{ steps.t.outputs.tf }}" = "1" ]; then python chartpush.py notify_tf.py; fi
+      - name: 정배열
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python chartpush.py chart_align.py
       - name: 커밋
         run: |
           git config user.name "github-actions[bot]"
