@@ -13,7 +13,7 @@ BAR_MS = {"1m": 60000, "5m": 300000, "15m": 900000, "1H": 3600000,
 TAGS = [("거가중 1분", "⚡", "long"), ("거가중", "❕", "long"), ("200선", "❗", "long"),
         ("VWAP 돌파", "📈", "long"), ("전고점", "🚀", "long"), ("뚫은 직후", "🔔", "long"),
         ("정배열 시작", "🟢", "info"), ("역배열 시작", "🔴", "info")]
-HEAD = {"long": "🟢 롱 타점", "info": "⚪ 참고용 (방향 신호 아님)"}
+HEAD_INFO = "⚪ 참고용 (방향 신호 아님)"
 CHK_VOL = 1.5
 CHK_TURN = {"1m": 100000, "5m": 300000}
 CHK_TURN_DEFAULT = 1000000
@@ -21,6 +21,9 @@ STOP_PCT = {"1m": 1.0, "5m": 1.5, "15m": 2.0}
 STOP_DEFAULT = 3.0
 STOP_BARS = 10
 VOL_AVG = 20
+MIN_GAP = 0.3
+RR_MIN = 1.5
+SWING_BARS = 100
 TURN_UP = 1.2
 TURN_DOWN = 0.8
 TREND_TXT = {"up": "📈상승", "down": "📉하락", "mix": "↔️혼조", None: "-"}
@@ -119,20 +122,88 @@ def fmt_usdt(v):
     return format(v, ",.0f")
 
 
-def verdict_long(raw, bar):
+def fp(x):
+    s = format(x, ".6g")
+    if "e" in s:
+        s = format(x, ".8f").rstrip("0")
+    return s
+
+
+def levels(cs, closes, direction, ki):
+    """목표 후보(가까운 순)와 손절 가격."""
+    price = closes[-1]
+    pts = []
+    e50 = ema_full(closes, 50)[-1]
+    e200 = ema_full(closes, 200)[-1]
+    if e50:
+        pts.append(("EMA50", e50))
+    if e200:
+        pts.append(("EMA200", e200))
+    if len(cs) >= VWAP_N:
+        w = cs[-VWAP_N:]
+        v = sum(float(x[5]) for x in w)
+        if v > 0:
+            pv = sum(((float(x[2]) + float(x[3]) + float(x[4])) / 3) * float(x[5]) for x in w)
+            pts.append(("거가중", pv / v))
+    swing = cs[-1 - SWING_BARS:-1]
+    gap = MIN_GAP / 100
+    recent = cs[max(0, ki - STOP_BARS):ki]
+    if direction == "long":
+        if swing:
+            pts.append(("최근고점", max(float(x[2]) for x in swing)))
+        tg = sorted([(n, p) for n, p in pts if p >= price * (1 + gap)], key=lambda t: t[1])
+        stop = min(float(x[3]) for x in recent)
+    else:
+        if swing:
+            pts.append(("최근저점", min(float(x[3]) for x in swing)))
+        tg = sorted([(n, p) for n, p in pts if p <= price * (1 - gap)], key=lambda t: -t[1])
+        stop = max(float(x[2]) for x in recent)
+    return tg, stop
+
+
+def target_line(price, tg, stop, direction):
+    parts = []
+    for n, p in tg[:2]:
+        parts.append(n + " " + fp(p) + "(" + format((p / price - 1) * 100, "+.1f") + "%)")
+    if parts:
+        t = "🎯 목표 " + " → ".join(parts)
+    elif direction == "long":
+        t = "🎯 위쪽 뚜렷한 저항 없음 (신고가 구간)"
+    else:
+        t = "🎯 아래쪽 뚜렷한 지지 없음 (신저가 구간)"
+    t += " · 손절 " + fp(stop) + "(" + format((stop / price - 1) * 100, "+.1f") + "%)"
+    rr = None
+    if tg:
+        risk = abs(stop / price - 1)
+        if risk > 0:
+            rr = abs(tg[0][1] / price - 1) / risk
+            t += " · 손익비 " + format(rr, ".1f")
+    return t, rr
+
+
+def verdict(raw, bar, direction):
+    """(통과 여부, 🧭 줄, 🎯 줄)"""
     try:
         cs = list(reversed(raw))
         n = len(cs)
         if n < 40:
-            return None
+            return False, None, None
         closes = [float(x[4]) for x in cs]
+        long_ = direction == "long"
+        name = "롱" if long_ else "숏"
         why = []
         r = rsi6(closes)
-        if r is not None and r <= 30:
-            why.append("RSI6 " + format(r, ".0f") + "(30 이하)")
         e7 = ema_full(closes, 7)
-        if e7[-1] is not None and closes[-1] <= e7[-1]:
-            why.append("EMA7 아래")
+        if long_:
+            if r is not None and r <= 30:
+                why.append("RSI6 " + format(r, ".0f") + "(30 이하)")
+            if e7[-1] is not None and closes[-1] <= e7[-1]:
+                why.append("EMA7 아래")
+        else:
+            if r is not None and r >= 70:
+                why.append("RSI6 " + format(r, ".0f") + "(70 이상)")
+            if e7[-1] is not None and closes[-1] >= e7[-1]:
+                why.append("EMA7 위")
         dur = BAR_MS.get(bar, 3600000)
         elapsed = int(time.time() * 1000) - int(cs[-1][0])
         live = cs[-1][8] == "0"
@@ -153,20 +224,25 @@ def verdict_long(raw, bar):
         if cur_turn < need:
             why.append("거래대금 " + fmt_usdt(cur_turn))
         price = closes[-1]
-        low_n = min(float(x[3]) for x in cs[max(0, ki - STOP_BARS):ki])
-        pct = (low_n / price - 1) * 100
-        lim = STOP_PCT.get(bar, STOP_DEFAULT)
-        if low_n >= price:
+        tg, stop = levels(cs, closes, direction, ki)
+        valid = stop < price if long_ else stop > price
+        tline = None
+        if not valid:
             why.append("손절 계산 불가")
-        elif pct <= -lim:
-            why.append("손절폭 " + format(pct, ".1f") + "%")
+        else:
+            tline, rr = target_line(price, tg, stop, direction)
+            sp = abs(stop / price - 1) * 100
+            lim = STOP_PCT.get(bar, STOP_DEFAULT)
+            if sp > lim:
+                why.append("손절폭 " + format(sp, ".1f") + "%")
+            if rr is not None and rr < RR_MIN:
+                why.append("손익비 " + format(rr, ".1f") + " (" + str(RR_MIN) + " 미만)")
         if why:
-            return "🧭 ❌ 롱 패스: " + " · ".join(why)
-        return ("🧭 ✅ 롱 후보 (거래량 ×" + format(vx, ".1f")
-                + " · 손절 " + format(pct, ".1f") + "%)")
+            return False, "🧭 ❌ " + name + " 패스: " + " · ".join(why), tline
+        return True, "🧭 ✅ " + name + " 후보 (거래량 ×" + format(vx, ".1f") + ")", tline
     except Exception as e:
         print("판정 오류:", type(e).__name__)
-        return None
+        return False, None, None
 
 
 def vol_trend(raw):
@@ -218,6 +294,24 @@ def big_picture(inst):
     return out
 
 
+def counter_of(tr, direction):
+    key = "down" if direction == "long" else "up"
+    bad = []
+    if tr["1D"] == key:
+        bad.append("일봉")
+    if tr["4H"] == key:
+        bad.append("4시간")
+    return bad
+
+
+def counter_line(bad, direction):
+    if not bad:
+        return None
+    if direction == "long":
+        return "⚠️ 역추세: " + "·".join(bad) + "이 하락인데 롱이라 '타점'이 아니라 '관망 신호'로 보내요"
+    return "⚠️ 역추세: " + "·".join(bad) + "이 상승인데 숏이라 '타점'이 아니라 '관망 신호'로 보내요"
+
+
 def classify(t):
     d, h4, h1 = t["1D"], t["4H"], t["1H"]
     if d is None:
@@ -231,41 +325,38 @@ def classify(t):
     return "🟡 기술적 반등 (큰 틀은 아래, 짧게 되돌리는 중)"
 
 
-def warn_long(tr):
-    bad = []
-    if tr["1D"] == "down":
-        bad.append("일봉")
-    if tr["4H"] == "down":
-        bad.append("4시간")
-    if bad:
-        return ("⚠️ 역추세 주의: " + "·".join(bad)
-                + "이 하락인데 롱이에요 (짧게 먹고 나오는 자리)")
-    return None
-
-
 def build_caption(cap, raw, bar, inst, direction):
-    lines = [HEAD.get(direction, HEAD["long"]), cap]
     try:
-        if direction == "long":
-            v = verdict_long(raw, bar)
-            if v:
-                lines.append(v)
+        tr = big_picture(inst)
         vt = vol_trend(raw)
+        view = ("🔭 큰 틀: 일봉 " + TREND_TXT[tr["1D"]] + " · 4시간 "
+                + TREND_TXT[tr["4H"]] + " · 1시간 " + TREND_TXT[tr["1H"]])
+        if direction != "long":
+            lines = [HEAD_INFO, cap]
+            if vt:
+                lines.append(vt)
+            lines.append(view)
+            lines.append("(롱·숏 판단은 🟢롱 / 🔻숏 타점 알림으로 보세요)")
+            return NL.join(lines)
+        ok, vline, tline = verdict(raw, bar, "long")
+        bad = counter_of(tr, "long")
+        is_tp = ok and not bad
+        lines = ["🟢 롱 타점" if is_tp else "🟡 롱 신호 (관망)", cap]
+        if vline:
+            lines.append(vline)
+        if tline:
+            lines.append(tline)
         if vt:
             lines.append(vt)
-        tr = big_picture(inst)
-        lines.append("🔭 큰 틀: 일봉 " + TREND_TXT[tr["1D"]] + " · 4시간 "
-                     + TREND_TXT[tr["4H"]] + " · 1시간 " + TREND_TXT[tr["1H"]])
-        if direction == "long":
-            w = warn_long(tr)
-            if w:
-                lines.append(w)
-            lines.append(classify(tr))
-        else:
-            lines.append("(롱·숏 판단은 🟢롱 / 🔻숏 타점 알림으로 보세요)")
+        lines.append(view)
+        cl = counter_line(bad, "long")
+        if cl:
+            lines.append(cl)
+        lines.append(classify(tr))
+        return NL.join(lines)
     except Exception as e:
         print("글 만들기 오류:", type(e).__name__)
-    return NL.join(lines)
+        return cap
 
 
 def make_chart(raw, sym, bar, path):
