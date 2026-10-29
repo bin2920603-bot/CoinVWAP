@@ -20,10 +20,14 @@ STOP_PCT = {"1m": 1.0, "5m": 1.5, "15m": 2.0}
 STOP_DEFAULT = 3.0
 STOP_BARS = 10
 VOL_AVG = 20
+TURN_UP = 1.2
+TURN_DOWN = 0.8
+TREND_TXT = {"up": "📈상승", "down": "📉하락", "mix": "↔️혼조", None: "-"}
 RE_A = re.compile(r"^(1분|5분|15분|1시간|4시간|일봉|주봉|월봉) · (\S+)")
 RE_B = re.compile(r"^(\S+) (일봉|1시간) .*고점 돌파")
 RE_C = re.compile(r"^(\S+) 거가중 위")
 _real_post = requests.post
+_cache = {}
 
 
 def parse(text):
@@ -66,6 +70,14 @@ def get_candles(inst, bar):
         except Exception:
             pass
     return None
+
+
+def candles_cached(inst, bar):
+    key = (inst, bar)
+    if key not in _cache:
+        _cache[key] = get_candles(inst, bar)
+        time.sleep(0.15)
+    return _cache[key]
 
 
 def ema_full(values, n):
@@ -154,6 +166,89 @@ def verdict(raw, bar):
         return None
 
 
+def vol_trend(raw):
+    """끝난 봉만 써서 거래대금이 늘고 있는지 줄고 있는지."""
+    try:
+        done = [x for x in raw if x[8] == "1"]
+        if len(done) < 8:
+            return None
+        a = sum(float(x[7]) for x in done[:3]) / 3
+        b = sum(float(x[7]) for x in done[3:8]) / 5
+        if b <= 0:
+            return None
+        r = a / b
+        if r >= TURN_UP:
+            t = "📈늘어나는 중"
+        elif r <= TURN_DOWN:
+            t = "📉줄어드는 중"
+        else:
+            t = "➖비슷함"
+        return "💰 거래대금 " + t + " (최근 3봉이 그 전 5봉의 ×" + format(r, ".1f") + ")"
+    except Exception as e:
+        print("거래대금 추세 오류:", type(e).__name__)
+        return None
+
+
+def trend_of(raw):
+    try:
+        cs = list(reversed(raw))
+        closes = [float(x[4]) for x in cs]
+        e20 = ema_full(closes, 20)
+        e50 = ema_full(closes, 50)
+        if e20[-1] is None or e50[-1] is None:
+            return None
+        c = closes[-1]
+        if c > e20[-1] > e50[-1]:
+            return "up"
+        if c < e20[-1] < e50[-1]:
+            return "down"
+        return "mix"
+    except Exception:
+        return None
+
+
+def big_picture(inst):
+    out = {}
+    for bar in ("1D", "4H", "1H"):
+        raw = candles_cached(inst, bar)
+        out[bar] = trend_of(raw) if raw else None
+    return out
+
+
+def classify(t):
+    d, h4, h1 = t["1D"], t["4H"], t["1H"]
+    if d is None:
+        return "⚪ 판단 보류 (일봉 자료가 부족해요)"
+    if d == "up" and h4 in ("up", "mix"):
+        return "🟢 눌림목 반등 (일봉 추세 위에서 쉬었다 오르는 중)"
+    if d == "up":
+        return "🟡 조정 중 반등 (일봉은 상승, 4시간이 아직 아래)"
+    if h4 == "up" and h1 == "up":
+        return "🟠 추세 전환 초기 (찐 반등 가능성, 일봉 확인 필요)"
+    return "🟡 기술적 반등 (큰 틀은 아래, 짧게 되돌리는 중)"
+
+
+def build_caption(cap, raw, bar, inst):
+    lines = [cap]
+    is_bear = "역배열" in cap
+    try:
+        if not is_bear:
+            v = verdict(raw, bar)
+            if v:
+                lines.append(v)
+        vt = vol_trend(raw)
+        if vt:
+            lines.append(vt)
+        tr = big_picture(inst)
+        lines.append("🔭 큰 틀: 일봉 " + TREND_TXT[tr["1D"]] + " · 4시간 "
+                     + TREND_TXT[tr["4H"]] + " · 1시간 " + TREND_TXT[tr["1H"]])
+        if not is_bear:
+            lines.append(classify(tr))
+    except Exception as e:
+        print("글 만들기 오류:", type(e).__name__)
+    return NL.join(lines)
+
+
 def make_chart(raw, sym, bar, path):
     try:
         import matplotlib
@@ -237,17 +332,13 @@ def handle(url, data):
         if n >= MAX_CHARTS:
             rest.append(cap)
             continue
+        inst = sym + "-USDT-SWAP"
         png = None
-        raw = get_candles(sym + "-USDT-SWAP", bar)
-        time.sleep(0.2)
+        raw = candles_cached(inst, bar)
         if raw:
             png = make_chart(raw, sym, bar, "/tmp/cp_" + str(n) + ".png")
         if png:
-            full_cap = cap
-            if "역배열" not in cap:
-                v = verdict(raw, bar)
-                if v:
-                    full_cap = cap + NL + v
+            full_cap = build_caption(cap, raw, bar, inst)
             try:
                 with open(png, "rb") as f:
                     r = _real_post(photo_url, data={"chat_id": chat, "caption": full_cap[:1000]},
