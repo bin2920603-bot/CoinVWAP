@@ -10,9 +10,10 @@ BAR_CODE = {"1분": "1m", "5분": "5m", "15분": "15m", "1시간": "1H",
             "4시간": "4H", "일봉": "1D", "주봉": "1W", "월봉": "1M"}
 BAR_MS = {"1m": 60000, "5m": 300000, "15m": 900000, "1H": 3600000,
           "4H": 14400000, "1D": 86400000, "1W": 604800000, "1M": 2592000000}
-TAGS = [("거가중 1분", "⚡"), ("거가중", "❕"), ("200선", "❗"),
-        ("VWAP 돌파", "📈"), ("전고점", "🚀"), ("뚫은 직후", "🔔"),
-        ("정배열 시작", "🟢"), ("역배열 시작", "🔴")]
+TAGS = [("거가중 1분", "⚡", "long"), ("거가중", "❕", "long"), ("200선", "❗", "long"),
+        ("VWAP 돌파", "📈", "long"), ("전고점", "🚀", "long"), ("뚫은 직후", "🔔", "long"),
+        ("정배열 시작", "🟢", "info"), ("역배열 시작", "🔴", "info")]
+HEAD = {"long": "🟢 롱 타점", "info": "⚪ 참고용 (방향 신호 아님)"}
 CHK_VOL = 1.5
 CHK_TURN = {"1m": 100000, "5m": 300000}
 CHK_TURN_DEFAULT = 1000000
@@ -33,27 +34,29 @@ _cache = {}
 def parse(text):
     items = []
     tag = ""
+    direction = "long"
     for line in text.split(NL):
         s = line.strip()
         if not s:
             continue
         m = RE_A.match(s)
         if m:
-            items.append((m.group(2), BAR_CODE[m.group(1)], (tag + " " + s).strip()))
+            items.append((m.group(2), BAR_CODE[m.group(1)], (tag + " " + s).strip(), direction))
             continue
         m = RE_B.match(s)
         if m:
-            items.append((m.group(1), BAR_CODE[m.group(2)], (tag + " " + s).strip()))
+            items.append((m.group(1), BAR_CODE[m.group(2)], (tag + " " + s).strip(), direction))
             continue
         m = RE_C.match(s)
         if m:
-            items.append((m.group(1), "1m", (tag + " " + s).strip()))
+            items.append((m.group(1), "1m", (tag + " " + s).strip(), direction))
             continue
         if s.startswith("http") or s.startswith("(그 외"):
             continue
-        for key, emo in TAGS:
+        for key, emo, d in TAGS:
             if key in s:
                 tag = emo
+                direction = d
                 break
     return items
 
@@ -116,7 +119,7 @@ def fmt_usdt(v):
     return format(v, ",.0f")
 
 
-def verdict(raw, bar):
+def verdict_long(raw, bar):
     try:
         cs = list(reversed(raw))
         n = len(cs)
@@ -158,8 +161,8 @@ def verdict(raw, bar):
         elif pct <= -lim:
             why.append("손절폭 " + format(pct, ".1f") + "%")
         if why:
-            return "🧭 ❌ 패스: " + " · ".join(why)
-        return ("🧭 ✅ 진입 후보 (거래량 ×" + format(vx, ".1f")
+            return "🧭 ❌ 롱 패스: " + " · ".join(why)
+        return ("🧭 ✅ 롱 후보 (거래량 ×" + format(vx, ".1f")
                 + " · 손절 " + format(pct, ".1f") + "%)")
     except Exception as e:
         print("판정 오류:", type(e).__name__)
@@ -228,12 +231,23 @@ def classify(t):
     return "🟡 기술적 반등 (큰 틀은 아래, 짧게 되돌리는 중)"
 
 
-def build_caption(cap, raw, bar, inst):
-    lines = [cap]
-    is_bear = "역배열" in cap
+def warn_long(tr):
+    bad = []
+    if tr["1D"] == "down":
+        bad.append("일봉")
+    if tr["4H"] == "down":
+        bad.append("4시간")
+    if bad:
+        return ("⚠️ 역추세 주의: " + "·".join(bad)
+                + "이 하락인데 롱이에요 (짧게 먹고 나오는 자리)")
+    return None
+
+
+def build_caption(cap, raw, bar, inst, direction):
+    lines = [HEAD.get(direction, HEAD["long"]), cap]
     try:
-        if not is_bear:
-            v = verdict(raw, bar)
+        if direction == "long":
+            v = verdict_long(raw, bar)
             if v:
                 lines.append(v)
         vt = vol_trend(raw)
@@ -242,8 +256,13 @@ def build_caption(cap, raw, bar, inst):
         tr = big_picture(inst)
         lines.append("🔭 큰 틀: 일봉 " + TREND_TXT[tr["1D"]] + " · 4시간 "
                      + TREND_TXT[tr["4H"]] + " · 1시간 " + TREND_TXT[tr["1H"]])
-        if not is_bear:
+        if direction == "long":
+            w = warn_long(tr)
+            if w:
+                lines.append(w)
             lines.append(classify(tr))
+        else:
+            lines.append("(롱·숏 판단은 🟢롱 / 🔻숏 타점 알림으로 보세요)")
     except Exception as e:
         print("글 만들기 오류:", type(e).__name__)
     return NL.join(lines)
@@ -328,7 +347,7 @@ def handle(url, data):
     photo_url = url[:-len("sendMessage")] + "sendPhoto"
     last = None
     rest = []
-    for n, (sym, bar, cap) in enumerate(items):
+    for n, (sym, bar, cap, direction) in enumerate(items):
         if n >= MAX_CHARTS:
             rest.append(cap)
             continue
@@ -338,7 +357,7 @@ def handle(url, data):
         if raw:
             png = make_chart(raw, sym, bar, "/tmp/cp_" + str(n) + ".png")
         if png:
-            full_cap = build_caption(cap, raw, bar, inst)
+            full_cap = build_caption(cap, raw, bar, inst, direction)
             try:
                 with open(png, "rb") as f:
                     r = _real_post(photo_url, data={"chat_id": chat, "caption": full_cap[:1000]},
